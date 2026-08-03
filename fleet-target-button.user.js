@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Fonte Antiga - Fleet Target Button
 // @namespace    fa.fleet-target
-// @version      11.0.0
+// @version      12.0.0
 // @description  Turn each owned planet's coordinates into a target control; clicking fills destination coordinates in the fleet command tab
 // @match        *://antiga.hatedabamboo.me/*
 // @grant        none
@@ -10,18 +10,9 @@
 (function () {
   'use strict';
 
-  const TARGET_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="1em" height="1em" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5">
-    <circle cx="12" cy="12" r="8"></circle>
-    <line x1="12" y1="2" x2="12" y2="6"></line>
-    <line x1="12" y1="18" x2="12" y2="22"></line>
-    <line x1="2" y1="12" x2="6" y2="12"></line>
-    <line x1="18" y1="12" x2="22" y2="12"></line>
-  </svg>`;
-
   const style = document.createElement('style');
   style.textContent = `
     .fa-target-btn {
-      position: relative;
       display: inline-flex;
       align-items: center;
       justify-content: center;
@@ -30,30 +21,13 @@
       min-height: 1.2rem;
       padding: 0 0.2rem;
       border-radius: 3px;
+      background: rgba(255,255,255,0.1);
       font-size: 0.62rem;
       color: var(--fg-dim);
       cursor: pointer;
     }
-    .fa-target-icon {
-      position: absolute;
-      inset: 0;
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      opacity: 0.35;
-      pointer-events: none;
-    }
-    .fa-target-icon svg {
-      width: 1.35em;
-      height: 1.35em;
-    }
-    .fa-target-coords {
-      position: relative;
-      z-index: 1;
-      white-space: nowrap;
-    }
     .fa-target-btn:hover {
-      background: rgba(255,255,255,0.1);
+      background: rgba(255,255,255,0.18);
       color: var(--fg);
     }
   `;
@@ -142,18 +116,11 @@
     coordsEl.classList.add('fa-target-btn');
     coordsEl.title = `Set destination to ${system}:${position}`;
 
-    if (!coordsEl.querySelector('.fa-target-coords')) {
-      const label = document.createElement('span');
-      label.className = 'fa-target-coords';
-      label.textContent = coordsEl.textContent.trim();
-
-      const icon = document.createElement('span');
-      icon.className = 'fa-target-icon';
-      icon.setAttribute('aria-hidden', 'true');
-      icon.innerHTML = TARGET_SVG;
-
-      coordsEl.textContent = '';
-      coordsEl.append(icon, label);
+    // Clean up the icon decoration from the previous version, leaving only
+    // the coordinates on the lightly highlighted target control.
+    const oldLabel = coordsEl.querySelector('.fa-target-coords');
+    if (oldLabel || coordsEl.querySelector('.fa-target-icon')) {
+      coordsEl.textContent = oldLabel ? oldLabel.textContent.trim() : coordsEl.textContent.trim();
     }
 
     if (!coordsEl.dataset.faTargetBound) {
