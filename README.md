@@ -2,6 +2,12 @@
 
 Quality-of-life userscripts for [Fonte Antiga](https://antiga.hatedabamboo.me), a browser-based space strategy game.
 
+## Tested With
+
+| Game Version |
+|----------|
+| 0.3.0 |
+
 ## Installation
 
 1. Install the [Tampermonkey](https://tampermonkey.net/) browser extension
@@ -26,14 +32,6 @@ Adds an **"Expand unread"** button to the notifications panel. One click expands
 
 ### Resource Summary
 Appends a **Σ total** value after the resource columns in notification cards (exploration reports, battle results, harvests) and active fleet cargo rows. Gives you a quick sense of total haul without mentally adding Metal + Silicon + Helium.
-
-## Tested With
-
-| Game Version | Date |
-|-------------|------|
-| 0.3.0 | 2025-08-04 |
-
-The game version is written in the page source HTML (look for `version` in `<head>`).
 
 ## Notes
 
