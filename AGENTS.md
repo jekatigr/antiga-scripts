@@ -164,7 +164,8 @@ Each component appears in the income popover (`.income-popover-row`). The `stell
 
 ### Rules
 
-0. **Local files only:** Always check local project files before anything else. Never use web search — all research and answers must come from local files (saved HTML, JS modules, existing scripts, AGENTS.md).
+0. **Update tested version:** When making changes to scripts, update the "Tested With" table in README.md with the current game version (found in page source HTML as `version` in `<head>`). This keeps users informed about compatibility.
+1. **Local files only:** Always check local project files before anything else. Never use web search — all research and answers must come from local files (saved HTML, JS modules, existing scripts, AGENTS.md).
 1. **CSS class prefix:** Always use `.fa-` to avoid colliding with game styles
 2. **No `@grant`:** Don't use Tampermonkey GM_* APIs unless needed — the game's `req()` is already global
 3. **MutationObserver + debounce:** The game is a SPA; always watch for DOM changes, never rely on one-time injection
