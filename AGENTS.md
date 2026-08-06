@@ -183,7 +183,7 @@ Resources are rendered as `<span class="stat stat-m">` containing an inline SVG 
 | Script | Description |
 |--------|-------------|
 | `notifications-resource-summary.user.js` | Adds `Σ total` inline after resources in each notification card's stat row |
-| `notifications-expand-unread.user.js` | Adds a button to expand and mark all shown unread notifications as read |
+| `notifications-open-all.user.js` | Adds an "Open all" button for currently shown notifications |
 
 ## Stellar Objects
 
