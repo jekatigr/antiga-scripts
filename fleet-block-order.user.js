@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Fonte Antiga - Fleet Block Order
 // @namespace    fa.fleet-block-order
-// @version      1.0.0
+// @version      1.1.0
 // @description  Place the Deploy Fleet block above the Active Fleets block
 // @match        *://antiga.hatedabamboo.me/*
 // @grant        none
@@ -24,7 +24,10 @@
 
     if (!panel || !fleetsContainer || !deployFrame) return;
 
-    const activeFrame = fleetsContainer.closest('fieldset.frame');
+    // Use the frame class rather than the element type: the game has changed
+    // the wrapper markup between releases (fieldset/div), but the frame itself
+    // remains the block that must be reordered.
+    const activeFrame = fleetsContainer.closest('.frame');
     if (!activeFrame || activeFrame.parentElement !== panel || deployFrame.parentElement !== panel) return;
 
     const lockedIsInPanel = lockedFrame && lockedFrame.parentElement === panel;
@@ -33,10 +36,11 @@
       (!lockedIsInPanel || lockedFrame.nextElementSibling === deployFrame);
     if (alreadyOrdered) return;
 
-    // Keep the locked message with the deploy block. It is hidden when deployment
-    // is available, but should occupy the same position when it is shown.
-    if (lockedIsInPanel) panel.insertBefore(lockedFrame, activeFrame);
+    // Move the deploy frame first, then put the locked notice immediately
+    // before it. Doing this in the opposite order can leave the notice behind
+    // the active-fleets block when the update renders `active, deploy, locked`.
     panel.insertBefore(deployFrame, activeFrame);
+    if (lockedIsInPanel) panel.insertBefore(lockedFrame, deployFrame);
   }
 
   let timer = null;
@@ -49,7 +53,12 @@
   }
 
   const observer = new MutationObserver(schedule);
-  observer.observe(document.body, { childList: true, subtree: true });
+  observer.observe(document.body, {
+    childList: true,
+    subtree: true,
+    attributes: true,
+    attributeFilter: ['class']
+  });
 
   moveFleetBlocks();
 })();

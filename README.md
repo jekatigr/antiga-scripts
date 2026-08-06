@@ -6,7 +6,7 @@ Quality-of-life userscripts for [Fonte Antiga](https://antiga.hatedabamboo.me), 
 
 | Game Version |
 |----------|
-| 0.3.0 |
+| 0.3.1 |
 
 ## Installation
 
@@ -23,9 +23,6 @@ Moves the "Deploy Fleet" block above the "Active Fleets" list on the fleets tab 
 
 ### Launch Fleet and Advance
 Adds a **"Launch Fleet +1"** button next to the normal launch button. After a successful launch, it automatically increments the destination planet position by 1 — useful when launching fleets sequentially across multiple planets in the same system.
-
-### Fleet Target Button
-Turns each owned planet's coordinates (in the right sidebar) into a clickable target control. Clicking fills that planet's system and position into the fleet command destination fields, so you can quickly set your own planets as transport or attack targets without manually typing coordinates.
 
 ### Expand Unread Notifications
 Adds an **"Expand unread"** button to the notifications panel. One click expands all currently visible unread notifications and marks them as read — no need to click each one individually.
