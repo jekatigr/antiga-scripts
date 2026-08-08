@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Fonte Antiga - Expand Unread Notifications
 // @namespace    fa.notifications-expand-unread
-// @version      1.1.0
+// @version      1.2.0
 // @description  Add a button that opens all notifications shown on the current page
 // @match        *://antiga.hatedabamboo.me/*
 // @grant        none
@@ -35,12 +35,16 @@
     };
   }
 
+  function getReadKey(info) {
+    return `${info.isGameNews ? 'news' : 'notification'}:${info.id}`;
+  }
+
   function deferUnreadCard(card) {
     if (card.classList.contains('read')) return;
 
     const info = getCardReadInfo(card);
     if (!info) return;
-    pendingReads.set(`${info.isGameNews ? 'news' : 'notification'}:${info.id}`, info);
+    pendingReads.set(getReadKey(info), info);
   }
 
   async function markDeferredReads() {
@@ -50,14 +54,26 @@
     pendingReads.clear();
 
     try {
-      for (const { id, isGameNews, card } of reads) {
+      for (const info of reads) {
+        const { id, isGameNews, card } = info;
         const path = isGameNews ? `/game-news/${id}/read` : `/notifications/${id}/read`;
+        let succeeded = false;
+
         if (typeof window.req === 'function') {
-          await window.req('POST', path);
+          const response = await window.req('POST', path);
+          succeeded = response && response.status >= 200 && response.status < 300;
         } else {
           // Fallback for a page where the game's request helper is not exposed.
           card.querySelector('.notif-summary')?.click();
+          succeeded = true;
         }
+
+        if (!succeeded) {
+          // Keep failed reads queued so a later navigation or tab change retries them.
+          pendingReads.set(getReadKey(info), info);
+          continue;
+        }
+
         card.classList.add('read');
         card.querySelector('.notif-unread-dot')?.remove();
       }
@@ -66,6 +82,9 @@
       }
     } finally {
       flushingReads = false;
+      // If another page/filter action queued reads while this batch was running,
+      // finish them once the Notifications tab is no longer active.
+      if (!notificationsWasActive && pendingReads.size > 0) markDeferredReads();
     }
   }
 
@@ -84,9 +103,17 @@
       deferUnreadCard(card);
       // Do not invoke the game's summary handler here: it marks a notification
       // read immediately. The queued unread cards are marked when this tab is
-      // left instead.
+      // left or when the current page/filter is changed.
       card.classList.add('expanded');
     });
+  }
+
+  function flushBeforeNotificationNavigation(event) {
+    const target = event.target instanceof Element
+      ? event.target.closest('#notif-filter-bar .sub-tab-btn, #notif-pager #notif-prev, #notif-pager #notif-next')
+      : null;
+    if (!target || target.disabled) return;
+    markDeferredReads();
   }
 
   function updateButton() {
@@ -99,7 +126,7 @@
       button.type = 'button';
       button.className = 'action-btn fa-expand-unread-btn';
       button.textContent = 'Open all';
-      button.title = 'Open all notifications shown on this page; mark new ones read when you leave';
+      button.title = 'Open all notifications shown on this page; mark new ones read when you leave or change page/filter';
       button.addEventListener('click', openAllNotifications);
     }
 
@@ -135,6 +162,9 @@
     attributes: true,
     attributeFilter: ['class'],
   });
+  // Filter and pager buttons are re-rendered by the game, so use delegation.
+  // Capture phase runs before the game's own click handlers start refreshing.
+  document.addEventListener('click', flushBeforeNotificationNavigation, true);
   updateNotificationTabState();
   updateButton();
 })();
