@@ -6,7 +6,7 @@ Quality-of-life userscripts for [Fonte Antiga](https://antiga.hatedabamboo.me), 
 
 | Game Version |
 |----------|
-| 0.3.1 |
+| 0.3.2 |
 
 ## Installation
 

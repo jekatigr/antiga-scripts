@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Fonte Antiga - Launch Fleet and Advance
 // @namespace    fa.fleet-launch-next
-// @version      1.0.0
+// @version      1.1.0
 // @description  Add a second fleet launch button that advances the destination planet after a successful launch
 // @match        *://antiga.hatedabamboo.me/*
 // @grant        none
@@ -35,17 +35,35 @@
     input.dispatchEvent(new Event('input', { bubbles: true }));
   }
 
+  async function launchFleet() {
+    // The current game validates in reviewDeployFleet() and submits through a
+    // separate async helper. Capture that helper's result because the review
+    // function itself does not return or await the submission promise.
+    if (typeof window.reviewDeployFleet !== 'function' || typeof window.submitDeployFleet !== 'function') return false;
+
+    const originalSubmit = window.submitDeployFleet;
+    let submission = null;
+    const wrappedSubmit = function (...args) {
+      submission = Promise.resolve(originalSubmit.apply(this, args));
+      return submission;
+    };
+    window.submitDeployFleet = wrappedSubmit;
+    try {
+      window.reviewDeployFleet();
+      // Validation failures and colonization confirmation do not submit yet.
+      if (!submission) return false;
+      return (await submission) === true;
+    } finally {
+      if (window.submitDeployFleet === wrappedSubmit) window.submitDeployFleet = originalSubmit;
+    }
+  }
+
   async function launchAndAdvance(button) {
-    if (button.disabled || typeof window.deployFleet !== 'function') return;
+    if (button.disabled || typeof window.reviewDeployFleet !== 'function') return;
 
     button.disabled = true;
     try {
-      await window.deployFleet();
-
-      // deployFleet() leaves this field empty on success and writes the API
-      // error here on failure, so only advance after a successful launch.
-      const error = document.getElementById('fleet-error');
-      if (!error || !error.textContent.trim()) advanceDestinationPlanet();
+      if (await launchFleet()) advanceDestinationPlanet();
     } finally {
       button.disabled = false;
     }
