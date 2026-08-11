@@ -31,7 +31,7 @@ Adds an **"Open all"** button to the notifications panel. One click expands ever
 Appends a **Σ total** value after the resource columns in notification cards (exploration reports, battle results, harvests) and active fleet cargo rows. Gives you a quick sense of total haul without mentally adding Metal + Silicon + Helium.
 
 ### Notification Target Systems
-Automatically saves the system number from rendered notification targets and highlights those systems on the galaxy map. The map includes notification-type filters for Exploration, Attack, Transport, Harvest, Trade, and Other. Filter choices and saved targets persist in localStorage, and the map provides a button to clear all saved target systems.
+When the Galaxy tab opens, downloads all regular notifications in pages of 10 with a one-second pause between requests. Complete notification objects are cached in IndexedDB, and later syncs download only missing records. A progress bar shows the sync status, then the script rebuilds target-system highlights from the cached data. The map includes notification-type filters for Exploration, Attack, Transport, Harvest, Trade, and Other; filter choices persist in localStorage.
 
 ### Full-Width Galaxy Map
 Expands the galaxy map canvas to use the full width of the map frame instead of the game's default 640px limit, while keeping its default 640px height and circular system markers.
