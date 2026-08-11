@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Fonte Antiga - Notification Target Systems
 // @namespace    fa.notifications-target-systems
-// @version      1.1.0
-// @description  Mark galaxy systems mentioned by selected notification types
+// @version      1.2.0
+// @description  Cache notifications locally and mark their target systems on the galaxy map
 // @match        *://antiga.hatedabamboo.me/*
 // @grant        none
 // @run-at       document-end
@@ -15,6 +15,15 @@
   const LEGACY_MARKS_STORAGE_KEY = 'fa.target-systems';
   const TYPES_STORAGE_KEY = 'fa.target-system-types';
   const MAP_CHANGED_EVENT = 'fa-target-system-markers-changed';
+  // This is a shared contract for companion userscripts. The notifications
+  // store contains the complete raw object returned by /notifications.
+  const NOTIFICATION_DB_NAME = 'fa.notifications';
+  const NOTIFICATION_DB_VERSION = 1;
+  const NOTIFICATION_STORE = 'notifications';
+  const NOTIFICATION_META_STORE = 'metadata';
+  const NOTIFICATION_SYNC_META_KEY = 'sync';
+  const NOTIFICATION_PAGE_SIZE = 10;
+  const NOTIFICATION_REQUEST_DELAY_MS = 1000;
   const MARK_COLOR = '#b7ff00';
   const FILTER_ICON_HTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 5h18l-7 8v5l-4 2v-7L3 5z" fill="currentColor"></path></svg>';
 
@@ -99,15 +108,6 @@
       flex: 1;
       white-space: nowrap;
     }
-    .fa-target-clear-btn {
-      width: 100%;
-      margin-top: 0.35rem;
-      white-space: nowrap;
-    }
-    .fa-target-clear-btn:disabled {
-      opacity: 0.55;
-      cursor: not-allowed;
-    }
     .fa-target-map-legend {
       color: var(--fa-target-system-color);
     }
@@ -115,6 +115,39 @@
       position: absolute;
       z-index: 1;
       pointer-events: none;
+    }
+    .fa-target-sync {
+      margin-top: 0.55rem;
+      padding-top: 0.55rem;
+      border-top: 1px solid var(--border-soft);
+    }
+    .fa-target-sync-btn {
+      width: 100%;
+      white-space: nowrap;
+    }
+    .fa-target-sync-btn:disabled {
+      opacity: 0.65;
+      cursor: wait;
+    }
+    .fa-target-sync-progress {
+      display: block;
+      width: 100%;
+      height: 0.7rem;
+      margin-top: 0.45rem;
+      accent-color: var(--fa-target-system-color);
+    }
+    .fa-target-sync-status {
+      margin-top: 0.4rem;
+      padding: 0.4rem 0.5rem;
+      border: 1px solid var(--border-soft);
+      border-radius: 0.25rem;
+      background: var(--panel);
+      font-size: 0.72rem;
+      line-height: 1.35;
+      text-align: center;
+      white-space: pre-line;
+      overflow-wrap: anywhere;
+      font-variant-numeric: tabular-nums;
     }
   `;
   document.head.appendChild(style);
@@ -188,55 +221,301 @@
     window.dispatchEvent(new Event(MAP_CHANGED_EVENT));
   }
 
-  function notificationTypeForCard(card) {
-    const badge = card.querySelector('.card-badge');
-    const label = badge ? badge.textContent.trim().toLowerCase() : '';
-    if (!label || label === 'game news') return null;
-    if (label.includes('explor')) return 'exploration';
-    if (label.includes('attack') || label.includes('battle')) return 'attack';
-    if (label.includes('transport')) return 'transport';
-    if (label.includes('harvest')) return 'harvest';
-    if (label.includes('trade')) return 'trade';
+  const syncState = {
+    status: 'idle',
+    total: 0,
+    cached: 0,
+    newCount: 0,
+    error: '',
+    updatedAt: null,
+  };
+  let syncPromise = null;
+
+  function idbRequest(request) {
+    return new Promise((resolve, reject) => {
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error || new Error('IndexedDB request failed.'));
+    });
+  }
+
+  function openNotificationDb() {
+    if (!window.indexedDB) return Promise.reject(new Error('IndexedDB is unavailable.'));
+    return new Promise((resolve, reject) => {
+      const request = window.indexedDB.open(NOTIFICATION_DB_NAME, NOTIFICATION_DB_VERSION);
+      request.onupgradeneeded = () => {
+        const db = request.result;
+        let store;
+        if (!db.objectStoreNames.contains(NOTIFICATION_STORE)) {
+          store = db.createObjectStore(NOTIFICATION_STORE, { keyPath: 'id' });
+        } else {
+          store = request.transaction.objectStore(NOTIFICATION_STORE);
+        }
+        if (!store.indexNames.contains('created_at')) store.createIndex('created_at', 'created_at');
+        if (!store.indexNames.contains('destination_system')) store.createIndex('destination_system', 'destination_system');
+        if (!store.indexNames.contains('notification_type')) store.createIndex('notification_type', 'notification_type');
+        if (!db.objectStoreNames.contains(NOTIFICATION_META_STORE)) {
+          db.createObjectStore(NOTIFICATION_META_STORE, { keyPath: 'key' });
+        }
+      };
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error || new Error('Could not open notification cache.'));
+    });
+  }
+
+  function getNotificationMeta(db) {
+    return idbRequest(db.transaction(NOTIFICATION_META_STORE, 'readonly')
+      .objectStore(NOTIFICATION_META_STORE).get(NOTIFICATION_SYNC_META_KEY));
+  }
+
+  function saveNotificationMeta(db, value) {
+    return idbRequest(db.transaction(NOTIFICATION_META_STORE, 'readwrite')
+      .objectStore(NOTIFICATION_META_STORE).put({ ...value, key: NOTIFICATION_SYNC_META_KEY }));
+  }
+
+  function getStoredNotificationKeys(db) {
+    return idbRequest(db.transaction(NOTIFICATION_STORE, 'readonly')
+      .objectStore(NOTIFICATION_STORE).getAllKeys());
+  }
+
+  function getStoredNotifications(db) {
+    return idbRequest(db.transaction(NOTIFICATION_STORE, 'readonly')
+      .objectStore(NOTIFICATION_STORE).getAll());
+  }
+
+  function putStoredNotifications(db, notifications) {
+    if (notifications.length === 0) return Promise.resolve();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(NOTIFICATION_STORE, 'readwrite');
+      const store = tx.objectStore(NOTIFICATION_STORE);
+      for (const notification of notifications) store.put(notification);
+      tx.oncomplete = resolve;
+      tx.onerror = () => reject(tx.error || new Error('Could not save notifications.'));
+      tx.onabort = () => reject(tx.error || new Error('Could not save notifications.'));
+    });
+  }
+
+  function notificationTypeForData(notification) {
+    const notificationType = String(notification && notification.notification_type || '').toLowerCase();
+    const missionType = String(notification && notification.mission_type || '').toLowerCase();
+    if (notificationType.includes('explor') || missionType === 'explore') return 'exploration';
+    if (notificationType.includes('attack') || notificationType.includes('battle') || notificationType === 'planet_scanned' || missionType === 'attack') return 'attack';
+    if (notificationType.includes('harvest') || missionType === 'harvest') return 'harvest';
+    if (notificationType.includes('trade') || missionType === 'trade') return 'trade';
+    if (notificationType.includes('transport') || missionType === 'transport') return 'transport';
     return 'other';
   }
 
-  function targetSystemForCard(card) {
-    for (const coordinate of card.querySelectorAll('.notif-coord')) {
-      const match = coordinate.textContent.trim().match(/^Target:\s*(\d+)\s*:/i);
-      if (match) return Number(match[1]);
-    }
-
-    // Fallback for a markup change that leaves coordinates in the title.
-    const title = card.querySelector('.notif-title');
-    const match = title && title.textContent.match(/\bPlanet\s+(\d+)\s*-\s*\d+\b/i);
-    return match ? Number(match[1]) : null;
+  function targetSystemForData(notification) {
+    const system = Number(notification && notification.destination_system);
+    return Number.isSafeInteger(system) && system > 0 ? system : null;
   }
 
-  function scanRenderedNotifications() {
-    const cards = document.querySelectorAll('#notifications-container .notif-card');
-    let changed = false;
-    const existing = new Set(marks.map(mark => `${mark.system}:${mark.type}`));
+  function marksFromStoredNotifications(notifications) {
+    return normalizeMarks(notifications.map(notification => {
+      const system = targetSystemForData(notification);
+      return system ? { system, type: notificationTypeForData(notification) } : null;
+    }).filter(Boolean));
+  }
 
-    for (const card of cards) {
-      const system = targetSystemForCard(card);
-      const type = notificationTypeForCard(card);
-      if (!system || !type) continue;
-
-      const key = `${system}:${type}`;
-      if (existing.has(key)) continue;
-      existing.add(key);
-      marks.push({ system, type });
-      changed = true;
-    }
-
-    if (changed) {
+  async function rebuildMarksFromNotificationCache(db) {
+    const notifications = await getStoredNotifications(db);
+    // If the server has no notifications at all, retain migrated legacy marks
+    // until a notification is available to provide their source data.
+    if (notifications.length > 0 || syncState.total > 0) {
+      marks = marksFromStoredNotifications(notifications);
       saveMarks();
       notifyMapChanged();
     }
   }
 
-  function storedSystemCount() {
-    return new Set(marks.map(mark => mark.system)).size;
+  function updateSyncControls() {
+    const controls = document.querySelectorAll('.fa-target-sync');
+    if (controls.length === 0) return;
+
+    const syncing = syncState.status === 'syncing';
+    const total = Math.max(0, Number(syncState.total) || 0);
+    const cached = Math.max(0, Number(syncState.cached) || 0);
+    const progress = Math.min(cached, total);
+    let statusText = 'Not synced yet';
+    if (syncing) {
+      statusText = `Downloaded ${progress.toLocaleString()} / ${total.toLocaleString()}`;
+      if (syncState.newCount > 0) statusText += ` · ${syncState.newCount.toLocaleString()} new`;
+    } else if (syncState.status === 'complete') {
+      statusText = `${cached.toLocaleString()} cached`;
+      if (syncState.newCount > 0) statusText += ` · ${syncState.newCount.toLocaleString()} new`;
+      if (syncState.updatedAt) statusText += `\nUpdated ${new Date(syncState.updatedAt).toLocaleString()}`;
+    } else if (syncState.status === 'error') {
+      statusText = `Sync failed\n${syncState.error || 'Unknown error'}`;
+    }
+
+    controls.forEach(control => {
+      const button = control.querySelector('.fa-target-sync-btn');
+      const progressBar = control.querySelector('.fa-target-sync-progress');
+      const status = control.querySelector('.fa-target-sync-status');
+      if (button) {
+        button.disabled = syncing;
+        button.textContent = syncing ? 'Syncing notifications…' : 'Sync notifications';
+      }
+      if (progressBar) {
+        progressBar.max = total || 1;
+        progressBar.value = progress;
+        progressBar.classList.toggle('hidden', !syncing);
+      }
+      if (status) status.textContent = statusText;
+    });
+  }
+
+  function setSyncState(changes) {
+    Object.assign(syncState, changes);
+    updateSyncControls();
+  }
+
+  function notificationPageFromResponse(response) {
+    const body = response && response.body;
+    if (!response || response.status !== 200 || !body || !Array.isArray(body.notifications)) {
+      throw new Error((body && body.error) || `Notification request failed (HTTP ${response && response.status || 0}).`);
+    }
+    return {
+      notifications: body.notifications,
+      total: typeof body.total === 'number' ? body.total : body.notifications.length,
+    };
+  }
+
+  async function fetchNotificationPage(offset, limit = NOTIFICATION_PAGE_SIZE) {
+    return notificationPageFromResponse(await req('GET', `/notifications?limit=${limit}&offset=${offset}`));
+  }
+
+  function wait(milliseconds) {
+    return new Promise(resolve => window.setTimeout(resolve, milliseconds));
+  }
+
+  async function runNotificationSync() {
+    let db = null;
+    let offset = 0;
+    try {
+      db = await openNotificationDb();
+      const previousMeta = await getNotificationMeta(db);
+      const knownKeys = new Set((await getStoredNotificationKeys(db)).map(String));
+      const wasComplete = previousMeta && previousMeta.status === 'complete';
+      const firstPage = await fetchNotificationPage(0, NOTIFICATION_PAGE_SIZE);
+      const total = Math.max(0, firstPage.total);
+      setSyncState({
+        status: 'syncing',
+        total,
+        cached: knownKeys.size,
+        newCount: 0,
+        error: '',
+      });
+
+      let page = firstPage;
+      while (page.notifications.length > 0) {
+        const newNotifications = page.notifications.filter(notification => {
+          if (!notification || notification.id == null) return false;
+          const key = String(notification.id);
+          if (knownKeys.has(key)) return false;
+          knownKeys.add(key);
+          return true;
+        });
+        await putStoredNotifications(db, newNotifications);
+        setSyncState({ cached: knownKeys.size, newCount: syncState.newCount + newNotifications.length });
+
+        offset += page.notifications.length;
+        await saveNotificationMeta(db, {
+          status: 'syncing', total, cached: knownKeys.size,
+          nextOffset: offset, updatedAt: syncState.updatedAt,
+        });
+
+        if (offset >= total) break;
+        // Once a completed cache reaches an already-known record, all older
+        // records are cached too because the API is newest-first. This avoids
+        // downloading every historical page on every visit.
+        const reachedKnownRecord = wasComplete && page.notifications.some(notification => notification && notification.id != null && !newNotifications.includes(notification));
+        if (wasComplete && reachedKnownRecord) break;
+        await wait(NOTIFICATION_REQUEST_DELAY_MS);
+        page = await fetchNotificationPage(offset);
+      }
+
+      if (!wasComplete && offset < total) {
+        throw new Error('The server returned an incomplete notification page.');
+      }
+
+      const updatedAt = new Date().toISOString();
+      setSyncState({ status: 'complete', cached: knownKeys.size, updatedAt, error: '' });
+      await saveNotificationMeta(db, {
+        status: 'complete', total, cached: knownKeys.size,
+        nextOffset: offset, updatedAt,
+      });
+      await rebuildMarksFromNotificationCache(db);
+    } catch (error) {
+      const message = error && error.message ? error.message : String(error);
+      setSyncState({ status: 'error', error: message });
+      if (db) {
+        try {
+          await saveNotificationMeta(db, {
+            status: 'error', total: syncState.total, cached: syncState.cached,
+            nextOffset: offset, error: message, updatedAt: syncState.updatedAt,
+          });
+        } catch (_) {
+          // The visible error is sufficient if IndexedDB also failed.
+        }
+      }
+    } finally {
+      if (db) db.close();
+    }
+  }
+
+  function syncNotifications() {
+    if (syncPromise) return syncPromise;
+    syncPromise = runNotificationSync().finally(() => {
+      syncPromise = null;
+      updateSyncControls();
+    });
+    return syncPromise;
+  }
+
+  function loadPersistedSyncState() {
+    openNotificationDb().then(async db => {
+      try {
+        const meta = await getNotificationMeta(db);
+        if (meta && syncState.status === 'idle') {
+          setSyncState({
+            status: meta.status === 'complete' ? 'complete' : 'idle',
+            total: meta.total || 0,
+            cached: meta.cached || 0,
+            updatedAt: meta.updatedAt || null,
+            error: meta.error || '',
+          });
+        }
+      } finally {
+        db.close();
+      }
+    }).catch(() => {
+      // The automatic sync will show a useful error if storage is unavailable.
+    });
+  }
+
+  function createSyncControls() {
+    const wrap = document.createElement('div');
+    wrap.className = 'fa-target-sync';
+
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'action-btn fa-target-sync-btn';
+    button.addEventListener('click', syncNotifications);
+
+    const progress = document.createElement('progress');
+    progress.className = 'fa-target-sync-progress hidden';
+    progress.max = 1;
+    progress.value = 0;
+    progress.setAttribute('aria-label', 'Notification download progress');
+
+    const status = document.createElement('div');
+    status.className = 'muted fa-target-sync-status';
+    status.setAttribute('aria-live', 'polite');
+
+    wrap.append(button, progress, status);
+    updateSyncControls();
+    return wrap;
   }
 
   function setSelectedTypes(types) {
@@ -260,26 +539,6 @@
     filter.querySelectorAll('[data-fa-target-type]').forEach(input => {
       input.checked = selectedTypes.has(input.dataset.faTargetType);
     });
-  }
-
-  function updateClearButton() {
-    const buttons = document.querySelectorAll('.fa-target-clear-btn');
-    if (buttons.length === 0) return;
-
-    const count = storedSystemCount();
-    buttons.forEach(button => {
-      button.textContent = `Clear marked systems${count ? ` (${count})` : ''}`;
-      button.disabled = count === 0;
-    });
-  }
-
-  function clearMarkedSystems() {
-    if (storedSystemCount() === 0) return;
-    if (!window.confirm('Clear all saved notification target systems?')) return;
-    marks = [];
-    saveMarks();
-    updateClearButton();
-    notifyMapChanged();
   }
 
   function createFilterControls() {
@@ -333,12 +592,7 @@
 
     actions.append(selectAll, clearAll);
     panel.appendChild(actions);
-
-    const clearMarked = document.createElement('button');
-    clearMarked.type = 'button';
-    clearMarked.className = 'action-btn fa-target-clear-btn';
-    clearMarked.addEventListener('click', clearMarkedSystems);
-    panel.appendChild(clearMarked);
+    panel.appendChild(createSyncControls());
 
     details.appendChild(panel);
     return details;
@@ -359,7 +613,6 @@
     }
 
     syncFilterControls();
-    updateClearButton();
   }
 
   function injectMapHook() {
@@ -498,16 +751,28 @@
   }
 
   let timer = null;
+  let galaxyTabWasOpen = false;
   function update() {
     timer = null;
-    scanRenderedNotifications();
     ensureMapControls();
+    updateSyncControls();
+
+    const galaxyTab = document.getElementById('screen-systems');
+    const galaxyTabOpen = !!galaxyTab && !galaxyTab.classList.contains('hidden');
+    if (galaxyTabOpen && !galaxyTabWasOpen) syncNotifications();
+    galaxyTabWasOpen = galaxyTabOpen;
   }
 
   function schedule() {
     if (timer) clearTimeout(timer);
     timer = setTimeout(update, 150);
   }
+
+  document.addEventListener('click', event => {
+    document.querySelectorAll('.fa-target-filter[open]').forEach(filter => {
+      if (!filter.contains(event.target)) filter.removeAttribute('open');
+    });
+  });
 
   const observer = new MutationObserver(schedule);
   observer.observe(document.body, {
@@ -519,4 +784,5 @@
 
   injectMapHook();
   update();
+  loadPersistedSyncState();
 })();
