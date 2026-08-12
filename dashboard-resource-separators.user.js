@@ -76,7 +76,10 @@
     update();
 
     const observer = new MutationObserver(schedule);
-    observer.observe(document.body, {
+    // Observe the stable game shell so replacing #resource-bars during SPA
+    // navigation does not detach the observer.
+    const observeTarget = document.querySelector('#game-layout') || document.body;
+    observer.observe(observeTarget, {
       childList: true,
       characterData: true,
       subtree: true,
