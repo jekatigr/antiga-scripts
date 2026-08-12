@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Fonte Antiga - Notification Target Systems
 // @namespace    fa.notifications-target-systems
-// @version      1.2.0
+// @version      1.3.0
 // @description  Cache notifications locally and mark their target systems on the galaxy map
 // @match        *://antiga.hatedabamboo.me/*
 // @grant        none
@@ -16,7 +16,8 @@
   const TYPES_STORAGE_KEY = 'fa.target-system-types';
   const MAP_CHANGED_EVENT = 'fa-target-system-markers-changed';
   // This is a shared contract for companion userscripts. The notifications
-  // store contains the complete raw object returned by /notifications.
+  // store contains the complete raw notification object from /notifications
+  // (unwrapped from the combined feed on v0.3.3+).
   const NOTIFICATION_DB_NAME = 'fa.notifications';
   const NOTIFICATION_DB_VERSION = 1;
   const NOTIFICATION_STORE = 'notifications';
@@ -224,6 +225,7 @@
   const syncState = {
     status: 'idle',
     total: 0,
+    scanned: 0,
     cached: 0,
     newCount: 0,
     error: '',
@@ -334,8 +336,9 @@
 
     const syncing = syncState.status === 'syncing';
     const total = Math.max(0, Number(syncState.total) || 0);
+    const scanned = Math.max(0, Number(syncState.scanned) || 0);
     const cached = Math.max(0, Number(syncState.cached) || 0);
-    const progress = Math.min(cached, total);
+    const progress = Math.min(scanned, total);
     let statusText = 'Not synced yet';
     if (syncing) {
       statusText = `Downloaded ${progress.toLocaleString()} / ${total.toLocaleString()}`;
@@ -372,13 +375,35 @@
 
   function notificationPageFromResponse(response) {
     const body = response && response.body;
-    if (!response || response.status !== 200 || !body || !Array.isArray(body.notifications)) {
+    if (!response || response.status !== 200 || !body) {
       throw new Error((body && body.error) || `Notification request failed (HTTP ${response && response.status || 0}).`);
     }
-    return {
-      notifications: body.notifications,
-      total: typeof body.total === 'number' ? body.total : body.notifications.length,
-    };
+
+    // v0.3.3 returns one combined feed. Each page item wraps either a
+    // notification or a game-news entry, so pagination offsets count feed
+    // items rather than only the notifications we cache.
+    if (Array.isArray(body.items)) {
+      const items = body.items;
+      return {
+        notifications: items
+          .filter(item => item && item.kind !== 'game_news' && item.notification && typeof item.notification === 'object')
+          .map(item => item.notification),
+        itemCount: items.length,
+        total: typeof body.total === 'number' ? body.total : items.length,
+      };
+    }
+
+    // Keep compatibility with the pre-v0.3.3 response shape while existing
+    // pages/caches transition to the combined feed.
+    if (Array.isArray(body.notifications)) {
+      return {
+        notifications: body.notifications,
+        itemCount: body.notifications.length,
+        total: typeof body.total === 'number' ? body.total : body.notifications.length,
+      };
+    }
+
+    throw new Error((body && body.error) || 'Notification response has an unknown shape.');
   }
 
   async function fetchNotificationPage(offset, limit = NOTIFICATION_PAGE_SIZE) {
@@ -402,13 +427,14 @@
       setSyncState({
         status: 'syncing',
         total,
+        scanned: 0,
         cached: knownKeys.size,
         newCount: 0,
         error: '',
       });
 
       let page = firstPage;
-      while (page.notifications.length > 0) {
+      while (page.itemCount > 0) {
         const newNotifications = page.notifications.filter(notification => {
           if (!notification || notification.id == null) return false;
           const key = String(notification.id);
@@ -419,7 +445,8 @@
         await putStoredNotifications(db, newNotifications);
         setSyncState({ cached: knownKeys.size, newCount: syncState.newCount + newNotifications.length });
 
-        offset += page.notifications.length;
+        offset += page.itemCount;
+        setSyncState({ scanned: offset });
         await saveNotificationMeta(db, {
           status: 'syncing', total, cached: knownKeys.size,
           nextOffset: offset, updatedAt: syncState.updatedAt,

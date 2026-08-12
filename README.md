@@ -6,7 +6,7 @@ Quality-of-life userscripts for [Fonte Antiga](https://antiga.hatedabamboo.me), 
 
 | Game Version |
 |----------|
-| 0.3.2 |
+| 0.3.3 |
 
 ## Installation
 
@@ -38,6 +38,9 @@ When the Galaxy tab opens, downloads all regular notifications in pages of 10 wi
 
 ### Full-Width Galaxy Map
 Expands the galaxy map canvas to use the full width of the map frame instead of the game's default 640px limit, while keeping its default 640px height and circular system markers.
+
+### Planets Summary
+Adds a locally persisted Planet Summary table with separate **My planets** and **Explored planets** tabs. My planets show current API-observed economy, queues, buildings, defenses, stationed ships, and active fleets; explored planets show only information that can be known from notifications, without pretending to know private queues or current resources. Report-count columns were replaced with known Buildings and Known fleet information; explored rows do not show actions. Results are paginated at 20 rows per page so large notification caches are not rendered into the DOM at once. It passively observes successful API responses already requested by the game for planet data; it does not automatically request or synchronize anything. Owned-planet rows also have an optional manual update button. The overview is refreshed automatically from the live sidebar, intercepted game API responses, and local IndexedDB caches; opening and closing the popup only changes its visibility. The table combines current observed planet/economy/building/defense/queue data with read-only historical intelligence from the notification cache created by Notification Target Systems. Every category displays its own relative observation or report age. Unknown planets and fields remain marked as unknown rather than being fetched automatically.
 
 ## Notes
 

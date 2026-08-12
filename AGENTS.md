@@ -3,6 +3,10 @@
 Browser-based space strategy game at `https://antiga.hatedabamboo.me`.  
 This project contains Tampermonkey userscripts to enhance gameplay.
 
+## Source snapshots
+
+The `sources/` folder is a separate Git repository nested inside this project. It must contain only saved game source snapshots (HTML, JavaScript, CSS, and required assets) used as local reference when checking compatibility. Commit source snapshot changes in the `sources/` repository itself with `git -C sources ...`; do not add userscripts, project documentation, or other project files there.
+
 ## Game Overview
 
 - **Resources:** Metal (M), Silicon (S), Helium (H)
@@ -40,17 +44,67 @@ req('DELETE', '/notifications?mission_type=transport')
 | GET | `/game-news/unread-count` | `{ unread_count: N }` |
 | DELETE | `/game-news/:id` | Dismiss game news |
 | GET | `/planets/:id` | Planet details (name, system, position, distance, temperature, zone, `has_relic_building`, `has_stellar_object_feature`, `stellar_object_name`, `stellar_object_description`) |
+| GET | `/planets/:id/resources` | Current resources, capacities, production rates, income breakdown, and colony pools |
+| GET | `/planets/:id/buildings` | Building levels, effects, workloads, and upgrade metadata |
+| GET | `/planets/:id/build-queue` | Construction queue |
+| GET | `/planets/:id/research-queue` | Research queue |
+| GET | `/planets/:id/ship-queue` | Ship construction queue |
+| GET | `/planets/:id/defense-queue` | Defense construction queue |
+| GET | `/planets/:id/defenses` | Planetary defense inventory and stats |
+| GET | `/planets/:id/ships` | Stationed ship inventory and stats |
+| GET | `/fleets?active=true` | Active outbound/inbound fleets, ships, cargo, mission, and timing |
 
 #### Notification Types
 
 - `attack_incoming` – enemy fleet inbound
 - `planet_scanned` – another player scanned your planet
+- `scan_repelled` – your defenses destroyed an exploration fleet before its scan completed
 - `exploration_lost` – exploration fleet destroyed
 - `exploration` – exploration report (buildings, fleet, resources, debris). May include `stellar_object_detected`, `stellar_object_name`, `stellar_object_description` when a stellar object is found via Voyager Probe
 - `transport_delivered` / `transport_gathered` – resource transfer
 - `debris_harvested` – harvest result (metal + silicon only, no helium)
 - `relocate_arrived` – fleet relocation
+- `recover_gathered` – recovered population and automatons
 - `battle_report` – attack/defense outcome with loot
+
+#### Representative notification object shapes
+
+These examples document fields used by the saved notification renderer and summary script; they are representative contracts, not a dump of a live account database:
+
+```js
+{
+  notification_type: 'exploration',
+  created_at: '2026-01-15T12:00:00Z',
+  destination_system: 9,
+  destination_position: 7,
+  exploration: {
+    planet_id: 123,
+    planet_name: 'Mordor',
+    is_occupied: true,
+    resources: { metal: 83119, silicon: 1384413, helium: 928245 },
+    buildings: [{ name: 'Metal Mine', key: 'metal_mine', amount: 12 }],
+    ships: [{ ship_name: 'Scout', ship_key: 'scout', quantity: 3 }],
+    relic_detected: false,
+    stellar_object_detected: false,
+  },
+}
+```
+
+A failed exploration has no scan payload. Its notification means the target is defended/occupied, but it must not replace a successful report from another attempt:
+
+```js
+{
+  notification_type: 'exploration_lost',
+  created_at: '2026-01-15T12:05:00Z',
+  destination_system: 9,
+  destination_position: 7,
+  exploration: null,
+}
+```
+
+When both exist, the summary marks the planet **Occupied** and retains the newest successful exploration's resources, buildings, and ships. Multiple successful exploration notifications are reduced to the newest successful report; failed attempts only contribute the occupied signal.
+
+No saved notification object or renderer field identifies a Galactic Trade Guild headquarters. Guild planets are identified by game API fields instead: the systems payload uses `guild_kind`, while `/trade/guild-planets` objects use `kind` (`headquarters` or `chapter`) and `name`.
 
 ### DOM Structure
 
@@ -97,17 +151,26 @@ Each component appears in the income popover (`.income-popover-row`). The `stell
 
 ### Key JS Modules (from saved page source)
 
+These are the actual JavaScript modules loaded by the saved page. Userscripts in the project root are separate from the game source modules.
+
 | File | Purpose |
 |------|---------|
-| `core_*.js` | Global state, `req()`, theme, resource projection, formatting |
-| `notifications_*.js` | Notification rendering, pagination, filters, badge sync |
-| `fleets_*.js` | Fleet command, mission dispatch, ship selection |
-| `planet_*.js` | Planet view, buildings overview |
-| `buildings_*.js` | Construction queue, building cards |
-| `ships_*.js` | Shipyard, ship definitions |
-| `research_*.js` | Research tree and queue |
-| `dashboard_*.js` | Overview tab |
+| `icons_*.js` | Shared icon definitions and icon rendering |
+| `core_*.js` | Global state, `req()`, theme, resource projection, and shared helpers |
+| `cardgrid_*.js` | Shared card-grid rendering helpers |
+| `dashboard_*.js` | Dashboard and resource/income overview |
+| `buildings_*.js` | Construction and building cards/queues |
+| `research_*.js` | Research tree and research queue |
+| `ships_*.js` | Shipyard and ship definitions |
+| `modal_*.js` | Help, release, and modal dialogs |
+| `auth_*.js` | Authentication and session actions |
+| `systems_*.js` | System view and planet list |
 | `galaxymap_*.js` | Galaxy map visualization |
+| `fleets_*.js` | Fleet deployment, active fleets, and mission dispatch |
+| `trade_*.js` | Interstellar Commerce and trade fleets |
+| `notifications_*.js` | Notifications and game-news feed rendering; v0.3.3 uses combined `body.items` feed entries |
+| `planet_*.js` | Planet dashboard, resources, and queues |
+| `main_*.js` | Page startup, tab switching, and initialization |
 
 ### Global State (`state` object)
 
@@ -184,6 +247,15 @@ Resources are rendered as `<span class="stat stat-m">` containing an inline SVG 
 |--------|-------------|
 | `notifications-resource-summary.user.js` | Adds `Σ total` inline after resources in each notification card's stat row |
 | `notifications-open-all.user.js` | Adds an "Open all" button for currently shown notifications |
+| `planets-summary.user.js` | Adds a local summary of observed planets, queues, defenses, stationed ships, active fleets, and notification intelligence |
+
+## Planet Summary Data Contracts
+
+`planets-summary.user.js` uses a separate IndexedDB database named `fa.planets-summary` with `planets` and `metadata` stores. It reads the existing `fa.notifications` / `notifications` store without modifying it. Planet records are merged primarily by `galaxy:system:position`; `planet_id` is retained as a secondary identifier. API observations and notification reports remain separate, and every category has its own observation timestamp. Relative ages must not be treated as current game state when the source is a historical notification.
+
+The summary observes these game API responses when the game requests them: `/api/planets/:id`, `/resources`, `/buildings`, `/build-queue`, `/research-queue`, `/ship-queue`, `/defense-queue`, `/defenses`, `/ships`, and `/api/fleets?active=true`. It must not create automatic polling or notification synchronization requests. The optional per-owned-planet update action may request the known planet endpoints explicitly.
+
+The summary has separate paginated views for **My planets** and **Explored planets**. Private API-derived fields such as resources, production, capacities, buildings, defenses, stationed ships, and queues are shown only for owned planets. The explored view shows only notification-derived/public intelligence and must not imply knowledge of another planet's queues or current private state. Use `—` for unknown or unavailable values rather than misleading zeroes or textual unknown states. Only 20 rows should be rendered per page. The live owned-planet sidebar is authoritative; cached records must be canonicalized by `planet_id` where available and otherwise by `galaxy:system:position` to prevent duplicate rows.
 
 ## Stellar Objects
 
