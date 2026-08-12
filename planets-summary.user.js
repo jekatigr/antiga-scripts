@@ -1,5 +1,5 @@
 // ==UserScript==
-// @name         Fonte Antiga - Universe Overview
+// @name         Fonte Antiga - Planets Summary
 // @namespace    fa.planets-summary
 // @version      1.23.0
 // @description  Locally summarize observed planets, queues, buildings, active fleets, and notification intelligence
