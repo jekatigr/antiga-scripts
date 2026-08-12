@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Fonte Antiga - Notification Target Systems
 // @namespace    fa.notifications-target-systems
-// @version      1.3.0
+// @version      1.4.0
 // @description  Cache notifications locally and mark their target systems on the galaxy map
 // @match        *://antiga.hatedabamboo.me/*
 // @grant        none
@@ -19,6 +19,8 @@
   // store contains the complete raw notification object from /notifications
   // (unwrapped from the combined feed on v0.3.3+).
   const NOTIFICATION_DB_NAME = 'fa.notifications';
+  // Keep this database/store contract stable so notifications cached by older
+  // script versions remain readable after a userscript update.
   const NOTIFICATION_DB_VERSION = 1;
   const NOTIFICATION_STORE = 'notifications';
   const NOTIFICATION_META_STORE = 'metadata';
@@ -379,31 +381,20 @@
       throw new Error((body && body.error) || `Notification request failed (HTTP ${response && response.status || 0}).`);
     }
 
-    // v0.3.3 returns one combined feed. Each page item wraps either a
-    // notification or a game-news entry, so pagination offsets count feed
+    // The current game returns one combined feed. Each page item wraps either
+    // a notification or a game-news entry, so pagination offsets count feed
     // items rather than only the notifications we cache.
-    if (Array.isArray(body.items)) {
-      const items = body.items;
-      return {
-        notifications: items
-          .filter(item => item && item.kind !== 'game_news' && item.notification && typeof item.notification === 'object')
-          .map(item => item.notification),
-        itemCount: items.length,
-        total: typeof body.total === 'number' ? body.total : items.length,
-      };
+    if (!Array.isArray(body.items)) {
+      throw new Error((body && body.error) || 'Notification response has an unknown shape.');
     }
-
-    // Keep compatibility with the pre-v0.3.3 response shape while existing
-    // pages/caches transition to the combined feed.
-    if (Array.isArray(body.notifications)) {
-      return {
-        notifications: body.notifications,
-        itemCount: body.notifications.length,
-        total: typeof body.total === 'number' ? body.total : body.notifications.length,
-      };
-    }
-
-    throw new Error((body && body.error) || 'Notification response has an unknown shape.');
+    const items = body.items;
+    return {
+      notifications: items
+        .filter(item => item && item.kind !== 'game_news' && item.notification && typeof item.notification === 'object')
+        .map(item => item.notification),
+      itemCount: items.length,
+      total: typeof body.total === 'number' ? body.total : items.length,
+    };
   }
 
   async function fetchNotificationPage(offset, limit = NOTIFICATION_PAGE_SIZE) {
