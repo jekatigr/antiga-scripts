@@ -30,6 +30,9 @@ Adds an **"Open all"** button to the notifications panel. One click expands ever
 ### Resource Summary
 Appends a **Σ total** value after the resource columns in notification cards (exploration reports, battle results, harvests) and active fleet cargo rows. Gives you a quick sense of total haul without mentally adding Metal + Silicon + Helium.
 
+### Dashboard Resource Separators
+Adds spaces between thousands in the dashboard's available/storage resource amounts, so `100000/7654321` is displayed as `100 000/7 654 321`.
+
 ### Notification Target Systems
 When the Galaxy tab opens, downloads all regular notifications in pages of 10 with a one-second pause between requests. Complete notification objects are cached in IndexedDB, and later syncs download only missing records. A progress bar shows the sync status, then the script rebuilds target-system highlights from the cached data. The map includes notification-type filters for Exploration, Attack, Transport, Harvest, Trade, and Other; filter choices persist in localStorage.
 
