@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Fonte Antiga - Expand Unread Notifications
 // @namespace    fa.notifications-expand-unread
-// @version      1.2.0
-// @description  Add a button that opens all notifications shown on the current page
+// @version      1.3.0
+// @description  Open notifications and mark them read without changing their appearance until leaving the current view
 // @match        *://antiga.hatedabamboo.me/*
 // @grant        none
 // @run-at       document-end
@@ -19,9 +19,11 @@
   `;
   document.head.appendChild(style);
 
-  const pendingReads = new Map();
+  // A read request is sent immediately, but its visual state is held until the
+  // user leaves the current notification tab/page. This keeps the page stable
+  // while still updating the server as soon as a notification is opened.
+  const readRequests = new Map();
   let notificationsWasActive = false;
-  let flushingReads = false;
 
   function getCardReadInfo(card) {
     const deleteButton = card.querySelector('[data-action="delete"][data-id]');
@@ -39,53 +41,76 @@
     return `${info.isGameNews ? 'news' : 'notification'}:${info.id}`;
   }
 
-  function deferUnreadCard(card) {
+  function applyReadStyle(record) {
+    if (!record.succeeded || !record.card.isConnected) return;
+    record.card.classList.add('read');
+    record.card.querySelector('.notif-unread-dot')?.remove();
+  }
+
+  function requestRead(card) {
     if (card.classList.contains('read')) return;
 
     const info = getCardReadInfo(card);
     if (!info) return;
-    pendingReads.set(getReadKey(info), info);
+
+    const key = getReadKey(info);
+    let record = readRequests.get(key);
+    if (!record) {
+      record = { ...info, requested: false, succeeded: false };
+      readRequests.set(key, record);
+    }
+    if (record.requested || record.succeeded) return;
+
+    record.requested = true;
+    const path = info.isGameNews ? `/game-news/${info.id}/read` : `/notifications/${info.id}/read`;
+    record.promise = Promise.resolve()
+      .then(() => {
+        if (typeof window.req !== 'function') throw new Error('Game request helper unavailable');
+        return window.req('POST', path);
+      })
+      .then(response => {
+        if (!response || response.status < 200 || response.status >= 300) {
+          throw new Error(`Read request failed: ${response?.status ?? 'no response'}`);
+        }
+        record.succeeded = true;
+        if (!notificationsWasActive) applyReadStyle(record);
+      })
+      .catch(() => {
+        // Allow a later click/navigation to retry a transient failure.
+        record.requested = false;
+      });
   }
 
-  async function markDeferredReads() {
-    if (flushingReads || pendingReads.size === 0) return;
-    flushingReads = true;
-    const reads = Array.from(pendingReads.values());
-    pendingReads.clear();
+  function finalizeReads() {
+    const records = Array.from(readRequests.values());
+    if (records.length === 0) return;
 
-    try {
-      for (const info of reads) {
-        const { id, isGameNews, card } = info;
-        const path = isGameNews ? `/game-news/${id}/read` : `/notifications/${id}/read`;
-        let succeeded = false;
-
-        if (typeof window.req === 'function') {
-          const response = await window.req('POST', path);
-          succeeded = response && response.status >= 200 && response.status < 300;
-        } else {
-          // Fallback for a page where the game's request helper is not exposed.
-          card.querySelector('.notif-summary')?.click();
-          succeeded = true;
-        }
-
-        if (!succeeded) {
-          // Keep failed reads queued so a later navigation or tab change retries them.
-          pendingReads.set(getReadKey(info), info);
-          continue;
-        }
-
-        card.classList.add('read');
-        card.querySelector('.notif-unread-dot')?.remove();
-      }
+    // Do not race the badge refresh against the read POSTs. The cards can be
+    // replaced by a page/filter refresh while this waits, which is intentional.
+    Promise.all(records.map(record => record.promise)).then(() => {
+      records.forEach(applyReadStyle);
+      records.forEach(record => readRequests.delete(getReadKey(record)));
       if (typeof window.syncNotificationBadge === 'function') {
-        await window.syncNotificationBadge();
+        return Promise.resolve(window.syncNotificationBadge()).catch(() => {});
       }
-    } finally {
-      flushingReads = false;
-      // If another page/filter action queued reads while this batch was running,
-      // finish them once the Notifications tab is no longer active.
-      if (!notificationsWasActive && pendingReads.size > 0) markDeferredReads();
-    }
+    });
+  }
+
+  function interceptNotificationOpen(event) {
+    const target = event.target instanceof Element
+      ? event.target.closest('.notif-summary')
+      : null;
+    if (!target || event.target.closest('[data-action="delete"]')) return;
+
+    const card = target.closest('.notif-card');
+    if (!card) return;
+
+    // The game's handler marks the card visually before awaiting its API call.
+    // Replace it so only the server-side read happens now.
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    card.classList.toggle('expanded');
+    requestRead(card);
   }
 
   function updateNotificationTabState() {
@@ -93,17 +118,16 @@
     if (!panel) return;
 
     const isActive = panel.classList.contains('active');
-    if (notificationsWasActive && !isActive) markDeferredReads();
+    if (notificationsWasActive && !isActive) finalizeReads();
     notificationsWasActive = isActive;
   }
 
   function openAllNotifications() {
     const cards = document.querySelectorAll('#notifications-container .notif-card');
     cards.forEach(card => {
-      deferUnreadCard(card);
-      // Do not invoke the game's summary handler here: it marks a notification
-      // read immediately. The queued unread cards are marked when this tab is
-      // left or when the current page/filter is changed.
+      // Send the read request now, but keep the unread appearance until this
+      // page/filter or the Notifications tab is left.
+      requestRead(card);
       card.classList.add('expanded');
     });
   }
@@ -113,7 +137,7 @@
       ? event.target.closest('#notif-filter-bar .sub-tab-btn, #notif-pager #notif-prev, #notif-pager #notif-next')
       : null;
     if (!target || target.disabled) return;
-    markDeferredReads();
+    finalizeReads();
   }
 
   function updateButton() {
@@ -126,7 +150,7 @@
       button.type = 'button';
       button.className = 'action-btn fa-expand-unread-btn';
       button.textContent = 'Open all';
-      button.title = 'Open all notifications shown on this page; mark new ones read when you leave or change page/filter';
+      button.title = 'Open all notifications shown on this page; mark them read now but keep the unread style until you leave';
       button.addEventListener('click', openAllNotifications);
     }
 
@@ -164,6 +188,7 @@
   });
   // Filter and pager buttons are re-rendered by the game, so use delegation.
   // Capture phase runs before the game's own click handlers start refreshing.
+  document.addEventListener('click', interceptNotificationOpen, true);
   document.addEventListener('click', flushBeforeNotificationNavigation, true);
   updateNotificationTabState();
   updateButton();

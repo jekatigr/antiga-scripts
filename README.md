@@ -25,7 +25,7 @@ Moves the "Deploy Fleet" block above the "Active Fleets" list on the fleets tab 
 Adds a **"Launch Fleet +1"** button next to the normal launch button. After a successful launch, it automatically increments the destination planet position by 1 — useful when launching fleets sequentially across multiple planets in the same system.
 
 ### Open All Notifications
-Adds an **"Open all"** button to the notifications panel. One click expands every notification currently shown on the page; unread items are marked as read when leaving the Notifications tab or changing the notification page/filter.
+Adds an **"Open all"** button to the notifications panel. One click expands every notification currently shown and marks unread items read on the server immediately, while preserving their unread appearance until leaving the Notifications tab or changing the page/filter. Clicking an individual notification behaves the same way.
 
 ### Resource Summary
 Appends a **Σ total** value after the resource columns in notification cards (exploration reports, battle results, harvests) and active fleet cargo rows. Gives you a quick sense of total haul without mentally adding Metal + Silicon + Helium.
