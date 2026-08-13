@@ -2,7 +2,7 @@
 // @name         Fonte Antiga - Expand Unread Notifications
 // @namespace    fa.notifications-expand-unread
 // @version      1.3.0
-// @description  Open notifications and mark them read without changing their appearance until leaving the current view
+// @description  Open all notifications and mark them read without changing their appearance until leaving the current view
 // @match        *://antiga.hatedabamboo.me/*
 // @grant        none
 // @run-at       document-end
@@ -96,23 +96,6 @@
     });
   }
 
-  function interceptNotificationOpen(event) {
-    const target = event.target instanceof Element
-      ? event.target.closest('.notif-summary')
-      : null;
-    if (!target || event.target.closest('[data-action="delete"]')) return;
-
-    const card = target.closest('.notif-card');
-    if (!card) return;
-
-    // The game's handler marks the card visually before awaiting its API call.
-    // Replace it so only the server-side read happens now.
-    event.preventDefault();
-    event.stopImmediatePropagation();
-    card.classList.toggle('expanded');
-    requestRead(card);
-  }
-
   function updateNotificationTabState() {
     const panel = document.getElementById('panel-notifications');
     if (!panel) return;
@@ -188,7 +171,6 @@
   });
   // Filter and pager buttons are re-rendered by the game, so use delegation.
   // Capture phase runs before the game's own click handlers start refreshing.
-  document.addEventListener('click', interceptNotificationOpen, true);
   document.addEventListener('click', flushBeforeNotificationNavigation, true);
   updateNotificationTabState();
   updateButton();
