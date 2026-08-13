@@ -190,31 +190,49 @@
         const db = await openDb();
         const previous = await meta(db);
         const keys = new Set((await result(db.transaction(STORE, 'readonly').objectStore(STORE).getAllKeys())).map(String));
-        // Existing records are the source of truth. A missing/stale metadata
-        // row must not cause a complete saved cache to be paged forever.
-        const full = keys.size === 0 && (!previous || previous.status !== 'complete');
+        // A completed sync can stop at the first cached item. An interrupted
+        // sync must first reach the last notification committed by its prior
+        // run; cached items before that checkpoint do not prove that there is
+        // no gap after it.
+        const full = !previous || previous.status !== 'complete';
+        const resumeId = full && previous && previous.status === 'syncing' && previous.lastDownloadedId != null
+          ? String(previous.lastDownloadedId) : null;
+        let checkpointReached = !resumeId;
         let offset = 0;
         let current = await page(0);
         await saveMeta(db, { status: 'syncing', total: current.total, nextOffset: 0 });
         while (current.itemCount > 0) {
-          const fresh = current.notifications.filter(notification => {
+          const notifications = current.notifications;
+          const checkpointIndex = !checkpointReached && resumeId
+            ? notifications.findIndex(notification => String(notification.id) === resumeId) : -1;
+          if (checkpointIndex >= 0) checkpointReached = true;
+
+          // Before the checkpoint, cached records are ignored as stop signals.
+          // Once the checkpoint has been reached, or for a completed sync, the
+          // first cached record is the safe boundary for this page.
+          let boundaryIndex = -1;
+          if (!full || (resumeId && checkpointReached)) {
+            const searchFrom = checkpointIndex >= 0 ? checkpointIndex + 1 : 0;
+            boundaryIndex = notifications.findIndex((notification, index) =>
+              index >= searchFrom && keys.has(String(notification.id)));
+          }
+          const pageNotifications = boundaryIndex >= 0
+            ? notifications.slice(0, boundaryIndex) : notifications;
+          const fresh = pageNotifications.filter(notification => {
             const key = String(notification.id);
             if (keys.has(key)) return false;
             keys.add(key);
             return true;
           });
-          await upsert(fresh, { status: 'syncing', total: current.total, nextOffset: offset });
+          const lastDownloaded = pageNotifications[pageNotifications.length - 1];
+          const checkpoint = checkpointReached && lastDownloaded
+            ? { lastDownloadedId: String(lastDownloaded.id) } : {};
+          await upsert(fresh, { status: 'syncing', total: current.total, nextOffset: offset, ...checkpoint });
           offset += current.itemCount;
-          await saveMeta(db, { status: 'syncing', total: current.total, cached: keys.size, nextOffset: offset });
-          if (offset >= current.total) break;
-          // The feed is newest-first. Once a page contains a cached
-          // notification, older pages are already represented for an
-          // incremental sync. This also makes an existing complete cache do
-          // only one head-page check, even if metadata is missing.
-          const reachedKnownRecord = current.notifications.some(notification => !fresh.includes(notification));
-          if (!full && reachedKnownRecord) {
-            break;
-          }
+          await saveMeta(db, {
+            status: 'syncing', total: current.total, cached: keys.size, nextOffset: offset, ...checkpoint,
+          });
+          if (boundaryIndex >= 0 || offset >= current.total) break;
           await new Promise(resolve => setTimeout(resolve, PAGE_DELAY));
           current = await page(offset);
         }
@@ -514,6 +532,7 @@
         let targetMarks = [];
         let marksLoaded = false;
         let marksLoadPromise = null;
+        let systemsScreenWasVisible = false;
         let mapWasVisible = false;
 
         function requestResult(request) {
@@ -612,11 +631,19 @@
           return !!body && !body.classList.contains('hidden');
         }
         function observeMapVisibility() {
+          const systemsScreen = document.getElementById('screen-systems');
+          const systemsVisible = !!systemsScreen && !systemsScreen.classList.contains('hidden');
           const visible = mapIsVisible();
-          if (visible && !mapWasVisible) {
+          // Leaving and returning to the Galaxy tab is a reload trigger even
+          // when the map itself remained expanded in the background.
+          if (systemsVisible && !systemsScreenWasVisible) {
+            marksLoaded = false;
+            loadMarksForVisibleMap();
+          } else if (visible && !mapWasVisible) {
             marksLoaded = false;
             loadMarksForVisibleMap();
           }
+          systemsScreenWasVisible = systemsVisible;
           mapWasVisible = visible;
         }
         function drawTargetSystems() {
