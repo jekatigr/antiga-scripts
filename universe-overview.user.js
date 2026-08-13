@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Fonte Antiga - Universe Overview
 // @namespace    fa.universe-overview
-// @version      2.35.0
+// @version      2.36.0
 // @description  Locally summarize observed planets, queues, buildings, and notification intelligence
 // @match        *://antiga.hatedabamboo.me/*
 // @grant        none
@@ -75,6 +75,257 @@
     searchTimer: null,
     persistChain: Promise.resolve(),
   };
+
+  // Shared notification-cache service. This intentionally lives in every
+  // notification consumer so either script works when installed alone.
+  (function startNotificationCacheService() {
+    const SERVICE_KEY = '__faNotificationCacheService';
+    if (window[SERVICE_KEY]) return;
+    const DB_NAME = 'fa.notifications';
+    const DB_VERSION = 1;
+    const STORE = 'notifications';
+    const META = 'metadata';
+    const META_KEY = 'sync';
+    const PAGE_SIZE = 10;
+    const PAGE_DELAY = 1000;
+    const UPDATE_EVENT = 'fa-notifications-updated';
+    const CHANNEL = 'fa.notifications';
+    let dbPromise = null;
+    let syncPromise = null;
+    let lastUnread = null;
+    const channel = typeof BroadcastChannel === 'undefined' ? null : new BroadcastChannel(CHANNEL);
+
+    function result(request) {
+      return new Promise((resolve, reject) => {
+        request.onsuccess = () => resolve(request.result);
+        request.onerror = () => reject(request.error || new Error('IndexedDB request failed.'));
+      });
+    }
+    function openDb() {
+      if (dbPromise) return dbPromise;
+      dbPromise = new Promise((resolve, reject) => {
+        if (!indexedDB) return reject(new Error('IndexedDB is unavailable.'));
+        const request = indexedDB.open(DB_NAME, DB_VERSION);
+        request.onupgradeneeded = () => {
+          const db = request.result;
+          const store = db.objectStoreNames.contains(STORE)
+            ? request.transaction.objectStore(STORE)
+            : db.createObjectStore(STORE, { keyPath: 'id' });
+          if (!store.indexNames.contains('created_at')) store.createIndex('created_at', 'created_at');
+          if (!store.indexNames.contains('destination_system')) store.createIndex('destination_system', 'destination_system');
+          if (!store.indexNames.contains('notification_type')) store.createIndex('notification_type', 'notification_type');
+          if (!db.objectStoreNames.contains(META)) db.createObjectStore(META, { keyPath: 'key' });
+        };
+        request.onsuccess = () => {
+          resolve(request.result);
+        };
+        request.onerror = () => {
+          reject(request.error || new Error('Could not open notification cache.'));
+        };
+      });
+      dbPromise.catch(() => { dbPromise = null; });
+      return dbPromise;
+    }
+    async function meta(db) { return result(db.transaction(META, 'readonly').objectStore(META).get(META_KEY)); }
+    async function saveMeta(db, changes) {
+      const current = (await meta(db)) || {};
+      return result(db.transaction(META, 'readwrite').objectStore(META).put({ ...current, ...changes, key: META_KEY }));
+    }
+    function items(body) {
+      return body && Array.isArray(body.items) ? body.items
+        .filter(item => item && item.kind !== 'game_news' && item.notification && item.notification.id != null)
+        .map(item => item.notification) : [];
+    }
+    function announce() {
+      window.dispatchEvent(new Event(UPDATE_EVENT));
+      try { channel?.postMessage({ type: UPDATE_EVENT }); } catch (_) {}
+    }
+    function installPageNetworkBridge() {
+      const script = document.createElement('script');
+      script.textContent = `
+        (function () {
+          'use strict';
+          if (window.__faNotificationNetworkBridge) return;
+          window.__faNotificationNetworkBridge = true;
+          const SOURCE = 'fa.notifications.network';
+          function report(url, status, text) {
+            let path;
+            try { path = new URL(url, location.href).pathname; } catch (_) { return; }
+            if (path !== '/api/poll' && path !== '/api/notifications') return;
+            let body;
+            try { body = JSON.parse(text); } catch (_) { return; }
+            window.postMessage({ source: SOURCE, path, status, body }, '*');
+          }
+          function installFetch() {
+            if (!window.fetch || window.fetch.__faNotificationNetworkBridge) return !!window.fetch;
+            const nativeFetch = window.fetch;
+            function wrappedFetch(...args) {
+              const url = args[0] && args[0].url ? args[0].url : args[0];
+              const request = nativeFetch.apply(this, args);
+              request.then(response => response.clone().text().then(text => report(url, response.status, text))).catch(() => {});
+              return request;
+            }
+            wrappedFetch.__faNotificationNetworkBridge = true;
+            window.fetch = wrappedFetch;
+            return true;
+          }
+          function installXhr() {
+            if (!window.XMLHttpRequest || XMLHttpRequest.prototype.__faNotificationNetworkBridge) return !!window.XMLHttpRequest;
+            const nativeOpen = XMLHttpRequest.prototype.open;
+            const nativeSend = XMLHttpRequest.prototype.send;
+            XMLHttpRequest.prototype.open = function (method, url, ...args) {
+              this.__faNotificationNetworkBridgeUrl = url;
+              return nativeOpen.call(this, method, url, ...args);
+            };
+            XMLHttpRequest.prototype.send = function (...args) {
+              this.addEventListener('load', () => report(this.__faNotificationNetworkBridgeUrl, this.status, this.responseText));
+              return nativeSend.apply(this, args);
+            };
+            XMLHttpRequest.prototype.__faNotificationNetworkBridge = true;
+            return true;
+          }
+          function tryInstall() {
+            const ready = installFetch() && installXhr();
+            if (!ready) window.setTimeout(tryInstall, 50);
+          }
+          tryInstall();
+        })();
+      `;
+      (document.head || document.documentElement).appendChild(script);
+      script.remove();
+    }
+    function handlePageNetworkMessage(event) {
+      if (!event.data || event.data.source !== 'fa.notifications.network' || event.data.status < 200 || event.data.status >= 300) return;
+      if (event.data.path === '/api/poll') poll(event.data.body).catch(() => {});
+      if (event.data.path === '/api/notifications') upsert(items(event.data.body)).catch(() => {});
+    }
+    window.addEventListener('message', handlePageNetworkMessage);
+    installPageNetworkBridge();
+    async function upsert(notifications, changes = {}) {
+      if (!notifications.length) return;
+      const db = await openDb();
+      await new Promise((resolve, reject) => {
+        const tx = db.transaction(STORE, 'readwrite');
+        notifications.forEach(notification => tx.objectStore(STORE).put(notification));
+        tx.oncomplete = resolve;
+        tx.onerror = () => reject(tx.error || new Error('Could not save notifications.'));
+        tx.onabort = () => reject(tx.error || new Error('Could not save notifications.'));
+      });
+      const cached = await result(db.transaction(STORE, 'readonly').objectStore(STORE).count());
+      await saveMeta(db, { ...changes, cached, updatedAt: new Date().toISOString() });
+      announce();
+    }
+    async function page(offset) {
+      const response = await fetch(`/api/notifications?limit=${PAGE_SIZE}&offset=${offset}`, {
+        credentials: 'same-origin', headers: { Accept: 'application/json' },
+      });
+      if (!response.ok) throw new Error(`Notification request failed (HTTP ${response.status}).`);
+      const body = await response.json();
+      if (!body || !Array.isArray(body.items)) throw new Error('Notification response has an unknown shape.');
+      return { notifications: items(body), itemCount: body.items.length, total: Number(body.total) || body.items.length };
+    }
+    async function sync() {
+      if (syncPromise) return syncPromise;
+      const runSync = async () => {
+        const db = await openDb();
+        const previous = await meta(db);
+        const keys = new Set((await result(db.transaction(STORE, 'readonly').objectStore(STORE).getAllKeys())).map(String));
+        // Existing records are the source of truth. A missing/stale metadata
+        // row must not cause a complete saved cache to be paged forever.
+        const full = keys.size === 0 && (!previous || previous.status !== 'complete');
+        let offset = 0;
+        let current = await page(0);
+        await saveMeta(db, { status: 'syncing', total: current.total, nextOffset: 0 });
+        while (current.itemCount > 0) {
+          const fresh = current.notifications.filter(notification => {
+            const key = String(notification.id);
+            if (keys.has(key)) return false;
+            keys.add(key);
+            return true;
+          });
+          await upsert(fresh, { status: 'syncing', total: current.total, nextOffset: offset });
+          offset += current.itemCount;
+          await saveMeta(db, { status: 'syncing', total: current.total, cached: keys.size, nextOffset: offset });
+          if (offset >= current.total) break;
+          // The feed is newest-first. Once a page contains a cached
+          // notification, older pages are already represented for an
+          // incremental sync. This also makes an existing complete cache do
+          // only one head-page check, even if metadata is missing.
+          const reachedKnownRecord = current.notifications.some(notification => !fresh.includes(notification));
+          if (!full && reachedKnownRecord) {
+            break;
+          }
+          await new Promise(resolve => setTimeout(resolve, PAGE_DELAY));
+          current = await page(offset);
+        }
+        await saveMeta(db, { status: 'complete', total: current.total, cached: keys.size, nextOffset: offset, updatedAt: new Date().toISOString() });
+        announce();
+      };
+      const execute = async () => {
+        if (navigator.locks && typeof navigator.locks.request === 'function') {
+          return navigator.locks.request('fa.notifications.sync', { ifAvailable: true }, lock => {
+            if (!lock) return undefined;
+            return runSync();
+          });
+        }
+        return runSync();
+      };
+      syncPromise = execute().catch(() => {}).finally(() => {
+        syncPromise = null;
+      });
+      return syncPromise;
+    }
+    async function poll(body) {
+      const unread = Number(body && body.notifications_unread);
+      if (!Number.isFinite(unread)) return;
+      const db = await openDb();
+      const saved = await meta(db);
+      const old = lastUnread == null ? Number(saved && saved.unreadCount) : lastUnread;
+      lastUnread = unread;
+      await saveMeta(db, { unreadCount: unread });
+      // Only start another synchronization when the unread count increases.
+      // Do not queue a second full sync while the initial backfill is still
+      // running; otherwise each poll restarts the pagination after completion.
+      if (Number.isFinite(old) && unread > old && !syncPromise) sync();
+    }
+    function inspect(url, response) {
+      if (!response || !response.ok) return;
+      let path = '';
+      try { path = new URL(url, location.href).pathname; } catch (_) { return; }
+      if (path === '/api/poll') response.clone().json().then(poll).catch(() => {});
+      if (path === '/api/notifications') response.clone().json().then(body => upsert(items(body))).catch(() => {});
+    }
+    if (window.fetch && !window.fetch.__faNotificationCache) {
+      const nativeFetch = window.fetch;
+      const wrappedFetch = function (...args) {
+        const url = args[0] && args[0].url ? args[0].url : args[0];
+        const request = nativeFetch.apply(this, args);
+        request.then(response => inspect(url, response)).catch(() => {});
+        return request;
+      };
+      wrappedFetch.__faNotificationCache = true;
+      window.fetch = wrappedFetch;
+    }
+    if (window.XMLHttpRequest && !XMLHttpRequest.prototype.__faNotificationCache) {
+      const nativeOpen = XMLHttpRequest.prototype.open;
+      const nativeSend = XMLHttpRequest.prototype.send;
+      XMLHttpRequest.prototype.open = function (method, url, ...args) {
+        this.__faNotificationCacheUrl = url;
+        return nativeOpen.call(this, method, url, ...args);
+      };
+      XMLHttpRequest.prototype.send = function (...args) {
+        this.addEventListener('load', () => {
+          if (this.status >= 200 && this.status < 300) {
+            try { inspect(this.__faNotificationCacheUrl, new Response(this.responseText, { status: this.status })); } catch (_) {}
+          }
+        });
+        return nativeSend.apply(this, args);
+      };
+      XMLHttpRequest.prototype.__faNotificationCache = true;
+    }
+    window[SERVICE_KEY] = { sync };
+    sync();
+  })();
 
   const style = document.createElement('style');
   style.textContent = `
@@ -1375,6 +1626,16 @@
     sidebarPlanets().forEach(saveRecord);
     scheduleRender();
   }
+  window.addEventListener('fa-notifications-updated', () => loadNotifications());
+  if (typeof BroadcastChannel !== 'undefined') {
+    try {
+      const notificationChannel = new BroadcastChannel('fa.notifications');
+      notificationChannel.addEventListener('message', event => {
+        if (event.data && event.data.type === 'fa-notifications-updated') loadNotifications();
+      });
+    } catch (_) {}
+  }
+
   function start() {
     loadOwnData();
     loadNotifications();
