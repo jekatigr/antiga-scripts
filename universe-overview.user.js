@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Fonte Antiga - Universe Overview
 // @namespace    fa.universe-overview
-// @version      2.43.0
-// @description  Locally summarize observed planets, queues, buildings, and notification intelligence
+// @version      2.45.0
+// @description  Locally summarize colonies with overview, building, ship, and defense inventory tabs
 // @match        *://antiga.hatedabamboo.me/*
 // @grant        none
 // @run-at       document-start
@@ -63,6 +63,7 @@
     expanded: new Set(),
     search: '',
     view: 'owned',
+    ownedSubview: 'overview',
     page: 0,
     pageSize: 20,
     sort: 'name',
@@ -77,6 +78,7 @@
     lastError: '',
     renderTimer: null,
     searchTimer: null,
+    renderedView: null,
     persistChain: Promise.resolve(),
   };
 
@@ -362,6 +364,8 @@
     .fa-summary-close { min-width: 2rem; }
     .fa-summary-controls { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; padding: .65rem 1rem; background: var(--panel-alt); border-bottom: 1px solid var(--border-soft); }
     .fa-summary-tabs { display: flex; gap: .35rem; width: 100%; padding-bottom: .15rem; }
+    .fa-summary-subtabs { padding-top: .05rem; padding-left: 0; }
+    .fa-summary-subtabs[hidden] { display: none; }
     .fa-summary-tab { min-width: 8.5rem; border-color: var(--border-soft); background: var(--bg, #0a0d13); color: var(--muted); font-weight: 600; opacity: .65; }
     .fa-summary-tab:hover, .fa-summary-tab:focus-visible { opacity: 1; }
     .fa-summary-tab.active { color: var(--fg); border-color: var(--accent); background: var(--panel); opacity: 1; box-shadow: inset 0 -2px 0 var(--accent); }
@@ -373,8 +377,8 @@
     .fa-summary-progress[hidden] { display: none !important; }
     .fa-summary-progress-bar { flex: 1 1 auto; width: 8rem; height: .7rem; accent-color: var(--accent); }
     .fa-summary-progress-label { min-width: max-content; color: var(--muted); font-size: .72rem; white-space: nowrap; }
-    .fa-summary-filter-head { display: flex; align-items: center; width: 100%; min-width: 0; gap: .3rem; box-sizing: border-box; white-space: nowrap; }
-    .fa-summary-filter-head > span:first-child { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; line-height: 1.15; }
+    .fa-summary-filter-head { display: flex; align-items: flex-end; width: 100%; min-width: 0; gap: .3rem; box-sizing: border-box; white-space: normal; }
+    .fa-summary-filter-head > span:first-child { flex: 1 1 auto; min-width: 0; overflow: visible; text-overflow: clip; white-space: normal; overflow-wrap: normal; word-break: normal; line-height: 1.15; }
     .fa-summary-filter-head .fa-summary-sort-indicator { flex: 0 0 1em; }
     .fa-summary-filter-head > .fa-summary-filter-button { flex: 0 0 1.25rem; }
     .fa-summary-table th.fa-summary-has-filter { padding-right: .5rem; }
@@ -405,21 +409,29 @@
     .fa-summary-status { display: flex; align-items: center; gap: .5rem; flex: 1 1 100%; min-height: 1.1em; font-size: .78rem; white-space: pre-line; }
     .fa-summary-status-text { min-width: 0; }
     .fa-summary-table-wrap { overflow: auto; container-type: inline-size; }
-    .fa-summary-table { width: 100%; min-width: 1380px; table-layout: fixed; border-collapse: collapse; font-size: .78rem; }
+    .fa-summary-table { width: 100%; min-width: 0; table-layout: fixed; border-collapse: collapse; font-size: .78rem; }
     .fa-summary-table th, .fa-summary-table td { box-sizing: border-box; padding: .45rem .5rem; vertical-align: top; border-bottom: 1px solid var(--border-soft); text-align: left; }
-    .fa-summary-table th { overflow: visible; }
+    .fa-summary-table th { overflow: visible; vertical-align: bottom; }
     .fa-summary-table td { overflow: hidden; }
-    .fa-summary-table td > div:not(.fa-summary-icon-line):not(.fa-summary-actions-inner):not(.fa-summary-name-content) { overflow: hidden; text-overflow: ellipsis; }
+    .fa-summary-table td > div:not(.fa-summary-icon-line):not(.fa-summary-actions-inner):not(.fa-summary-name-content):not(.fa-summary-inventory-queue) { overflow: hidden; text-overflow: ellipsis; }
     .fa-summary-table .fa-summary-sub { overflow: hidden; text-overflow: ellipsis; }
     .fa-summary-table tbody td { position: relative; min-height: 0; }
     .fa-summary-table tbody td > .fa-summary-time { float: none; flex: none; }
-    .fa-summary-table thead { position: sticky; top: -1px; z-index: 5; }
+    .fa-summary-table thead { position: sticky; top: -1px; z-index: 5; box-shadow: 0 1px 0 var(--border-soft), 0 2px 3px rgba(0,0,0,.2); }
     .fa-summary-table th { color: var(--muted); background: var(--bg, #0a0d13); white-space: nowrap; cursor: default; }
+    .fa-summary-table th.fa-summary-inventory-header { white-space: normal; }
+    .fa-summary-table th.fa-summary-inventory-header .fa-summary-filter-head { align-items: flex-end; white-space: normal; }
+    .fa-summary-table th.fa-summary-inventory-header .fa-summary-filter-head > span:first-child { overflow: visible; text-overflow: clip; white-space: normal; overflow-wrap: normal; word-break: normal; }
     .fa-summary-table th.fa-summary-sortable { cursor: pointer; }
     .fa-summary-table tbody tr { background: var(--bg, #0a0d13); }
     .fa-summary-table tbody tr:hover { background: var(--panel-alt) !important; }
     .fa-summary-table tbody tr:hover > td { background: transparent !important; }
+    .fa-summary-table th.fa-summary-planet-sticky { position: sticky; left: 0; z-index: 7; background: var(--bg, #0a0d13); box-shadow: 1px 0 0 var(--border-soft); }
+    .fa-summary-table td.fa-summary-planet-sticky { position: sticky; left: 0; z-index: 2; background: var(--bg, #0a0d13); box-shadow: 1px 0 0 var(--border-soft); }
+    .fa-summary-table tbody tr:hover > td.fa-summary-planet-sticky,
+    .fa-summary-table tbody tr.fa-summary-row-expanded > td.fa-summary-planet-sticky { background: var(--panel-alt) !important; }
     .fa-summary-table tbody tr.fa-summary-data-row { cursor: pointer; }
+    .fa-summary-table tbody tr.fa-summary-data-row.fa-summary-nonexpandable { cursor: default; }
     .fa-summary-table tbody tr.fa-summary-data-row.fa-summary-row-expanded { background: var(--panel-alt); }
     .fa-summary-table .fa-summary-name { font-weight: 600; white-space: nowrap; }
     .fa-summary-name-content { display: flex; flex-direction: column; align-items: stretch; gap: .25rem; min-width: 0; }
@@ -430,6 +442,7 @@
     .fa-summary-time { position: absolute !important; inset-inline-start: auto; inset-inline-end: .25rem; inset-block-end: .15rem; z-index: 0; display: block; width: max-content; max-width: calc(100% - .5rem); margin: 0; padding: .04rem .2rem; border: 1px solid var(--border-soft); border-radius: .15rem; background: var(--panel-alt) !important; color: var(--fg-dim, #8993a8) !important; font-size: .6rem; line-height: 1; white-space: nowrap; pointer-events: none; opacity: .9; contain: layout paint; }
     .fa-summary-time.fa-summary-time-stale { background: var(--fg) !important; border-color: var(--fg); color: var(--bg, #0a0d13) !important; opacity: 1; }
     .fa-summary-sub { display: block; margin-top: .15rem; color: var(--muted); font-size: .72rem; white-space: nowrap; }
+    .fa-summary-inventory-queue { display: inline-block; max-width: 100%; margin-top: .15rem; padding: .08rem .22rem; box-sizing: border-box; overflow: visible !important; text-overflow: clip !important; border: 1px solid var(--border-soft); border-radius: .2rem; background: var(--panel-alt); color: var(--fg); font-size: .62rem; line-height: 1.1; white-space: normal; overflow-wrap: normal; word-break: normal; }
     .fa-summary-stale { color: var(--muted); }
     .fa-summary-warn { color: #ffcc66; }
     .fa-summary-good { color: #9be37a; }
@@ -662,10 +675,24 @@
     time.title = timestampTitle || (observedAt ? `Observed/reported ${new Date(observedAt).toLocaleString()}` : 'Not observed');
     td.appendChild(time);
   }
+  function timestampMs(value) {
+    if (value == null || value === '') return null;
+    if (value instanceof Date) {
+      const time = value.getTime();
+      return Number.isFinite(time) ? time : null;
+    }
+    const text = String(value).trim();
+    if (/^[+-]?\d+(?:\.\d+)?$/.test(text)) {
+      const numeric = Number(text);
+      if (!Number.isFinite(numeric)) return null;
+      return Math.abs(numeric) < 1e12 ? numeric * 1000 : numeric;
+    }
+    const time = new Date(value).getTime();
+    return Number.isFinite(time) ? time : null;
+  }
   function iso(value) {
-    if (!value) return null;
-    const date = value instanceof Date ? value : new Date(value);
-    return Number.isNaN(date.getTime()) ? null : date.toISOString();
+    const time = timestampMs(value);
+    return time == null ? null : new Date(time).toISOString();
   }
   function coords(galaxy, system, position) {
     const g = Number(galaxy), s = Number(system), p = Number(position);
@@ -1248,12 +1275,133 @@
     td.appendChild(grid); tr.appendChild(td); return tr;
   }
 
+  const OWNED_SUBVIEWS = [
+    ['overview', 'Overview'],
+    ['buildings', 'Buildings'],
+    ['ships', 'Ships'],
+    ['defenses', 'Defences']
+  ];
+
+  function inventorySpec() {
+    const specs = {
+      buildings: {
+        dataKey: 'buildings', queueKey: 'buildQueue',
+        itemKey: item => item.type ?? item.building_key ?? item.key,
+        itemName: item => item.name || item.building_name || item.type || item.building_key || 'Building',
+        quantity: item => item.amount ?? item.quantity ?? item.level ?? 0,
+        queueKeyFor: item => item.building_key ?? item.type ?? item.key,
+      },
+      ships: {
+        dataKey: 'ships', queueKey: 'shipQueue',
+        itemKey: item => item.key ?? item.ship_key ?? item.type,
+        itemName: item => item.name || item.ship_name || item.key || item.ship_key || 'Ship',
+        quantity: item => item.quantity ?? item.amount ?? 0,
+        queueKeyFor: item => item.ship_key ?? item.key ?? item.type,
+      },
+      defenses: {
+        dataKey: 'defenses', queueKey: 'defenseQueue',
+        itemKey: item => item.key ?? item.ship_key ?? item.type,
+        itemName: item => item.name || item.ship_name || item.key || item.ship_key || 'Defense',
+        quantity: item => item.quantity ?? item.amount ?? 0,
+        queueKeyFor: item => item.ship_key ?? item.key ?? item.type,
+      },
+    };
+    return specs[state.ownedSubview] || null;
+  }
+
+  function inventoryColumnKey(itemKey) { return `inventory:${itemKey}`; }
+  function inventoryItemKey(spec, item) {
+    const key = spec?.itemKey(item);
+    return key == null || key === '' ? null : String(key);
+  }
+  function inventoryCatalog() {
+    const spec = inventorySpec();
+    if (!spec) return [];
+    const catalog = new Map();
+    for (const record of state.records.values()) {
+      if (record.owned !== true) continue;
+      [valueFor(record, spec.dataKey), valueFor(record, spec.queueKey)].forEach(items => {
+        if (!Array.isArray(items)) return;
+        items.forEach((item, index) => {
+          const key = inventoryItemKey(spec, item);
+          if (!key) return;
+          const label = String(spec.itemName(item));
+          const current = catalog.get(key);
+          if (!current) catalog.set(key, { key, label, order: index });
+          else if (/^(Building|Ship|Defense)$/.test(current.label) && label !== current.label) current.label = label;
+        });
+      });
+    }
+    return [...catalog.values()].sort((a, b) => a.order - b.order || a.label.localeCompare(b.label));
+  }
+  function inventoryQuantity(spec, item) { return Math.max(0, number(spec.quantity(item))); }
+  function formatDurationPerItem(seconds) {
+    const total = Math.max(0, Math.round(number(seconds)));
+    const days = Math.floor(total / 86400);
+    const hours = Math.floor((total % 86400) / 3600);
+    const minutes = Math.floor((total % 3600) / 60);
+    const remainder = total % 60;
+    const parts = [];
+    if (days) parts.push(`${days}d`);
+    if (hours) parts.push(`${hours}h`);
+    if (minutes) parts.push(`${minutes}m`);
+    if (remainder || !parts.length) parts.push(`${remainder}s`);
+    return parts.join(' ');
+  }
+  function queuedInventory(spec, record, itemKey, inventoryItem) {
+    const queue = valueFor(record, spec.queueKey);
+    if (!Array.isArray(queue)) return null;
+    const matching = queue.filter(item => {
+      const key = spec.queueKeyFor(item);
+      return key != null && String(key) === itemKey;
+    });
+    if (!matching.length) return null;
+    const quantity = matching.reduce((total, item) => {
+      const queued = item.remaining ?? item.quantity ?? item.amount;
+      return total + (queued == null ? 1 : Math.max(0, number(queued)));
+    }, 0);
+    if (quantity <= 0) return null;
+    const durationSource = inventoryItem?.next_build_time_seconds
+      ?? matching.find(item => item.next_build_time_seconds != null)?.next_build_time_seconds
+      ?? matching.find(item => item.build_time_seconds != null)?.build_time_seconds
+      ?? matching.find(item => item.duration_seconds != null)?.duration_seconds;
+    const perItemSeconds = durationSource == null || number(durationSource) <= 0 ? null : number(durationSource);
+    return { quantity, perItemSeconds };
+  }
+  function inventoryCell(record, spec, catalogItem) {
+    const items = valueFor(record, spec.dataKey);
+    const known = Array.isArray(items);
+    const item = known ? items.find(candidate => inventoryItemKey(spec, candidate) === catalogItem.key) : null;
+    const primary = !known ? '?' : item && inventoryQuantity(spec, item) > 0 ? fmt(inventoryQuantity(spec, item)) : '—';
+    const queued = known ? queuedInventory(spec, record, catalogItem.key, item) : null;
+    const td = document.createElement('td'); td.className = 'fa-summary-inventory-cell';
+    const value = document.createElement('div'); value.className = 'fa-summary-inventory-value'; value.textContent = primary;
+    if (primary === '—') value.classList.add('fa-summary-na');
+    td.appendChild(value);
+    if (queued) {
+      const queue = document.createElement('div'); queue.className = 'fa-summary-inventory-queue';
+      const count = document.createElement('span');
+      const tooltip = queued.perItemSeconds == null ? 'queued' : `queued, ${formatDurationPerItem(queued.perItemSeconds)} per item`;
+      count.textContent = queued.perItemSeconds == null ? `+${fmt(queued.quantity)} queued` : `+${fmt(queued.quantity)}`;
+      count.title = tooltip; count.setAttribute('aria-label', tooltip);
+      queue.appendChild(count);
+      queue.title = tooltip; td.appendChild(queue);
+    }
+    return td;
+  }
+
   function columnsForView() {
     if (state.view === 'explored') return [
-      ['#', 'number'], ['Location', 'coordinates'], ['Planet', 'name'], ['Last exploration', 'explorationAt'], ['Size', 'sizeTotal'], ['Status', 'status'], ['Features', 'features'], ['Buildings', 'buildings'], ['Known fleet', 'knownFleet'], ['Known defense', 'knownDefense'], ['Metal', 'exploredMetal'], ['Silicon', 'exploredSilicon'], ['Helium', 'exploredHelium'], ['Debris M', 'debrisMetal'], ['Debris S', 'debrisSilicon'], ['Survivors', 'exploredSurvivors'],
+      ['Location', 'coordinates'], ['Planet', 'name'], ['Last exploration', 'explorationAt'], ['Size', 'sizeTotal'], ['Status', 'status'], ['Features', 'features'], ['Buildings', 'buildings'], ['Known fleet', 'knownFleet'], ['Known defense', 'knownDefense'], ['Metal', 'exploredMetal'], ['Silicon', 'exploredSilicon'], ['Helium', 'exploredHelium'], ['Debris M', 'debrisMetal'], ['Debris S', 'debrisSilicon'], ['Survivors', 'exploredSurvivors'],
     ];
+    if (state.ownedSubview !== 'overview') {
+      return [
+        ['Location', 'coordinates'], ['Planet', 'name'],
+        ...inventoryCatalog().map(item => [item.label, inventoryColumnKey(item.key)]),
+      ];
+    }
     return [
-      ['#', 'number'], ['Location', 'coordinates'], ['Planet', 'name'], ['Size', 'sizeTotal'], ['Used size', 'sizeUsed'], ['Resources', 'resources'], ['Production / h', 'production'], ['Storage', 'storage'], ['Capacity', 'capacity'], ['Features', 'features'], ['Buildings', 'buildings'], ['Ships', 'ships'], ['Defenses', 'defenses'], ['Queues', 'queues'],
+      ['Location', 'coordinates'], ['Planet', 'name'], ['Size', 'sizeTotal'], ['Used size', 'sizeUsed'], ['Resources', 'resources'], ['Production / h', 'production'], ['Storage', 'storage'], ['Capacity', 'capacity'], ['Features', 'features'], ['Buildings', 'buildings'], ['Ships', 'ships'], ['Defenses', 'defenses'], ['Queues', 'queues'],
     ];
   }
   function makeRow(record, rowNumber) {
@@ -1262,33 +1410,36 @@
     const resourcesKnown = resourcesData != null;
     const row = document.createElement('tr');
     row.className = 'fa-summary-data-row';
-    row.tabIndex = 0;
-    row.setAttribute('role', 'button');
-    row.setAttribute('aria-expanded', String(state.expanded.has(record.key)));
-    row.title = 'Click to show or hide details';
-    const toggleDetails = () => {
-      const isExpanded = state.expanded.has(record.key);
-      if (isExpanded) {
-        state.expanded.delete(record.key);
-        const detail = row.nextElementSibling;
-        if (detail?.classList.contains('fa-summary-detail-row')) detail.remove();
-        row.classList.remove('fa-summary-row-expanded');
-      } else {
-        state.expanded.add(record.key);
-        row.after(renderDetails(record, columnsForView().length));
-        row.classList.add('fa-summary-row-expanded');
-      }
-      row.setAttribute('aria-expanded', String(!isExpanded));
-    };
-    row.addEventListener('click', event => {
-      if (event.target.closest('button, input, select, textarea, a')) return;
-      toggleDetails();
-    });
-    row.addEventListener('keydown', event => {
-      if (event.key !== 'Enter' && event.key !== ' ') return;
-      event.preventDefault();
-      toggleDetails();
-    });
+    if (state.view === 'owned') row.classList.add('fa-summary-nonexpandable');
+    if (state.view !== 'owned') {
+      row.tabIndex = 0;
+      row.setAttribute('role', 'button');
+      row.setAttribute('aria-expanded', String(state.expanded.has(record.key)));
+      row.title = 'Click to show or hide details';
+      const toggleDetails = () => {
+        const isExpanded = state.expanded.has(record.key);
+        if (isExpanded) {
+          state.expanded.delete(record.key);
+          const detail = row.nextElementSibling;
+          if (detail?.classList.contains('fa-summary-detail-row')) detail.remove();
+          row.classList.remove('fa-summary-row-expanded');
+        } else {
+          state.expanded.add(record.key);
+          row.after(renderDetails(record, columnsForView().length));
+          row.classList.add('fa-summary-row-expanded');
+        }
+        row.setAttribute('aria-expanded', String(!isExpanded));
+      };
+      row.addEventListener('click', event => {
+        if (event.target.closest('button, input, select, textarea, a')) return;
+        toggleDetails();
+      });
+      row.addEventListener('keydown', event => {
+        if (event.key !== 'Enter' && event.key !== ' ') return;
+        event.preventDefault();
+        toggleDetails();
+      });
+    }
     const displayNotif = record.owned === true ? null : notif;
     const reportAt = explorationAttemptAt(displayNotif);
     const name = record.name || (record.owned === true ? null : displayNotif?.name) || `Planet ${record.system ?? '—'}-${record.position ?? '—'}`;
@@ -1360,6 +1511,10 @@
       cells.defenses = observedCell(record, 'defenses', defensesKnown ? (defensesTotal ? fmt(defensesTotal) : '—') : '?');
       if (shipsKnown && !shipsTotal) cells.ships.classList.add('fa-summary-na');
       cells.queues = queueCell(record, { build: buildingQueueData == null ? null : buildingQueue.length, research: researchQueueData == null ? null : researchQueue.length, ships: shipQueueData == null ? null : shipQueue.length, defense: defenseQueueData == null ? null : defenseQueue.length }, queueObservedAt);
+      if (state.ownedSubview !== 'overview') {
+        const spec = inventorySpec();
+        inventoryCatalog().forEach(item => { cells[inventoryColumnKey(item.key)] = inventoryCell(record, spec, item); });
+      }
     }
     if (state.view === 'owned' && record.planetId != null) {
       const actionInner = document.createElement('div'); actionInner.className = 'fa-summary-actions-inner';
@@ -1375,7 +1530,7 @@
       nameContent.append(nameMain || document.createTextNode(''), actionInner);
       cells.name.prepend(nameContent);
     }
-    for (const [, key] of columnsForView()) { const current = cells[key]; if (current) { if (key === 'number') current.classList.add('fa-summary-number'); row.appendChild(current); } }
+    for (const [, key] of columnsForView()) { const current = cells[key]; if (current) { if (key === 'number') current.classList.add('fa-summary-number'); if (key === 'name') current.classList.add('fa-summary-planet-sticky'); row.appendChild(current); } }
     return row;
   }
   function columnSortValue(record, columnKey) {
@@ -1384,6 +1539,14 @@
     const base = latestBase(record);
     const resources = record.owned === true ? latestResources(record) : {};
     const knownBuildingsData = knownBuildings(record, notification);
+    if (columnKey.startsWith('inventory:')) {
+      const spec = inventorySpec();
+      const itemKey = columnKey.slice('inventory:'.length);
+      const items = spec ? valueFor(record, spec.dataKey) : null;
+      if (!Array.isArray(items)) return -1;
+      const item = items.find(candidate => inventoryItemKey(spec, candidate) === itemKey);
+      return item ? inventoryQuantity(spec, item) : 0;
+    }
     switch (columnKey) {
       case 'number': return 0;
       case 'coordinates': return displayCoords(record.system, record.position) || '';
@@ -1448,13 +1611,11 @@
       debrisMetal: 78, debrisSilicon: 78,
       exploredSurvivors: 96,
       queues: 92,
-    }[key] || 100;
+    }[key] || (key.startsWith('inventory:') ? 88 : 100);
   }
   function applyColumnWidths(table, viewColumns) {
     table.querySelector('colgroup')?.remove();
     const group = document.createElement('colgroup');
-    const total = viewColumns.reduce((sum, [, key]) => sum + columnWidthWeight(key), 0);
-    table.style.minWidth = `${total}px`;
     viewColumns.forEach(([, key]) => {
       const col = document.createElement('col'); col.style.width = `${columnWidthWeight(key)}px`; group.appendChild(col);
     });
@@ -1476,6 +1637,9 @@
   }
   function renderTable() {
     if (!state.panel) return;
+    const tableWrap = state.panel.querySelector('.fa-summary-table-wrap');
+    const viewKey = `${state.view}:${state.ownedSubview}`;
+    const viewChanged = state.renderedView !== viewKey;
     const tbody = state.panel.querySelector('.fa-summary-body');
     if (!tbody) return;
     tbody.replaceChildren();
@@ -1490,13 +1654,17 @@
     const table = state.panel.querySelector('.fa-summary-table');
     if (table) applyColumnWidths(table, viewColumns);
     const colspan = viewColumns.length;
-    records.forEach((record, index) => { tbody.appendChild(makeRow(record, start + index + 1)); if (state.expanded.has(record.key)) tbody.appendChild(renderDetails(record, colspan)); });
+    records.forEach((record, index) => {
+      tbody.appendChild(makeRow(record, start + index + 1));
+      if (state.view !== 'owned' && state.expanded.has(record.key)) tbody.appendChild(renderDetails(record, colspan));
+    });
     const status = state.panel.querySelector('.fa-summary-status');
     if (status) {
       const shown = allRecords.length ? `${start + 1}–${Math.min(start + effectivePageSize, allRecords.length)}` : '0';
       const storedCount = [...state.records.values()].filter(record => record.owned !== true && !isTradeGuildPlanetName(record.name) && recordNotifications(record)).length;
       const cacheStatus = state.view === 'explored' ? ` · ${storedCount} explored cached · Notifications ${state.notificationsLoaded ? 'loaded' : 'not available'}` : '';
-      const statusText = `${allRecords.length} ${state.view === 'owned' ? 'owned' : 'explored'} planet${allRecords.length === 1 ? '' : 's'} · showing ${shown}${cacheStatus}${state.lastError ? `\n${state.lastError}` : ''}`;
+      const rangeText = pageCount > 1 ? ` · showing ${shown}` : '';
+      const statusText = `${allRecords.length} ${state.view === 'owned' ? 'owned' : 'explored'} planet${allRecords.length === 1 ? '' : 's'}${rangeText}${cacheStatus}${state.lastError ? `\n${state.lastError}` : ''}`;
       status.replaceChildren();
       const statusLabel = document.createElement('span'); statusLabel.className = 'fa-summary-status-text'; statusLabel.textContent = statusText; status.appendChild(statusLabel);
     }
@@ -1536,6 +1704,8 @@
       };
       viewColumns.forEach(([label, columnKey]) => {
         const th = document.createElement('th'); th.dataset.sort = columnKey; th.dataset.label = label; th.title = descriptions[columnKey] || label;
+        if (columnKey.startsWith('inventory:')) th.classList.add('fa-summary-inventory-header');
+        if (columnKey === 'name') th.classList.add('fa-summary-planet-sticky');
         const sortableKey = columnKey === 'number' ? null : columnKey;
         const head = document.createElement('span'); head.className = 'fa-summary-filter-head';
         const labelText = document.createElement('span'); labelText.textContent = label; head.appendChild(labelText);
@@ -1545,7 +1715,19 @@
         addFilterMenu(th, columnKey);
       });
     }
-    state.panel.querySelectorAll('.fa-summary-tab').forEach(tab => tab.classList.toggle('active', tab.dataset.view === state.view));
+    state.panel.querySelectorAll('.fa-summary-main-tab').forEach(tab => tab.classList.toggle('active', tab.dataset.view === state.view));
+    const subTabs = state.panel.querySelector('.fa-summary-subtabs');
+    if (subTabs) {
+      subTabs.hidden = state.view !== 'owned';
+      subTabs.setAttribute('aria-hidden', String(state.view !== 'owned'));
+      subTabs.querySelectorAll('.fa-summary-subtab').forEach(tab => {
+        const active = state.view === 'owned' && tab.dataset.subview === state.ownedSubview;
+        tab.classList.toggle('active', active);
+        tab.setAttribute('aria-selected', String(active));
+      });
+    }
+    if (viewChanged && tableWrap) { tableWrap.scrollLeft = 0; tableWrap.scrollTop = 0; }
+    state.renderedView = viewKey;
   }
   const FILTER_ICON = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path fill="currentColor" d="M3 5a1 1 0 0 1 1-1h16a1 1 0 0 1 .8 1.6L15 13.333V19a1 1 0 0 1-.553.894l-4 2A1 1 0 0 1 9 19v-5.667L3.2 5.6A1 1 0 0 1 3 5Z"/></svg>';
   function filterOptions(columnKey) {
@@ -1604,7 +1786,13 @@
     sync();
   }
   function scheduleRender() { if (!state.panel || state.refreshingAll || state.renderTimer) return; state.renderTimer = setTimeout(() => { state.renderTimer = null; renderTable(); }, 80); }
-  function openPanel() { if (!state.panel) return; state.panel.classList.remove('hidden'); loadNotifications(); renderTable(); }
+  function openPanel() {
+    if (!state.panel) return;
+    state.panel.classList.remove('hidden');
+    state.renderedView = null;
+    loadNotifications();
+    renderTable();
+  }
   function closePanel() { state.panel?.classList.add('hidden'); }
 
   async function refreshPlanet(record, allowBulk = false) {
@@ -1679,17 +1867,26 @@
       const close = document.createElement('button'); close.className = 'fa-summary-close'; close.type = 'button'; close.textContent = '×'; close.title = 'Close'; close.addEventListener('click', closePanel);
       header.append(title, close);
       const controls = document.createElement('div'); controls.className = 'fa-summary-controls';
-      const tabs = document.createElement('div'); tabs.className = 'fa-summary-tabs';
-      [['owned', 'My planets'], ['explored', 'Explored planets']].forEach(([view, label]) => {
-        const tab = document.createElement('button'); tab.type = 'button'; tab.className = 'fa-summary-tab'; tab.dataset.view = view; tab.textContent = label;
+      const tabs = document.createElement('div'); tabs.className = 'fa-summary-tabs'; tabs.setAttribute('role', 'tablist');
+      [['owned', 'My colonies'], ['explored', 'Explored planets']].forEach(([view, label]) => {
+        const tab = document.createElement('button'); tab.type = 'button'; tab.className = 'fa-summary-tab fa-summary-main-tab'; tab.dataset.view = view; tab.textContent = label; tab.setAttribute('role', 'tab');
         tab.addEventListener('click', () => {
-          state.view = view; state.page = 0; state.statusFilters.clear(); state.featureFilters.clear(); state.search = ''; closeFilterMenus();
+          state.view = view; state.page = 0; state.statusFilters.clear(); state.featureFilters.clear(); state.search = ''; state.expanded.clear(); closeFilterMenus();
           if (state.searchTimer) { clearTimeout(state.searchTimer); state.searchTimer = null; }
           search.value = ''; syncSearchClear();
           state.sort = view === 'explored' ? 'explorationAt' : 'name';
           state.sortDirection = view === 'explored' ? -1 : 1;
           renderTable();
         }); tabs.appendChild(tab);
+      });
+      const subTabs = document.createElement('div'); subTabs.className = 'fa-summary-tabs fa-summary-subtabs'; subTabs.setAttribute('role', 'tablist'); subTabs.setAttribute('aria-label', 'My colony views');
+      OWNED_SUBVIEWS.forEach(([subview, label]) => {
+        const tab = document.createElement('button'); tab.type = 'button'; tab.className = 'fa-summary-tab fa-summary-subtab'; tab.dataset.subview = subview; tab.textContent = label; tab.setAttribute('role', 'tab');
+        tab.addEventListener('click', () => {
+          state.view = 'owned'; state.ownedSubview = subview; state.page = 0; state.statusFilters.clear(); state.featureFilters.clear(); state.expanded.clear(); closeFilterMenus();
+          state.sort = 'name'; state.sortDirection = 1;
+          renderTable();
+        }); subTabs.appendChild(tab);
       });
       const searchWrap = document.createElement('div'); searchWrap.className = 'fa-summary-search';
       const search = document.createElement('input'); search.type = 'search'; search.placeholder = 'Search planet or coordinates…';
@@ -1722,7 +1919,7 @@
       const toolbar = document.createElement('div'); toolbar.className = 'fa-summary-toolbar';
       toolbar.append(searchWrap, page, bulkControls);
       const status = document.createElement('div'); status.className = 'fa-summary-status';
-      controls.append(tabs, toolbar, status);
+      controls.append(tabs, subTabs, toolbar, status);
       const wrap = document.createElement('div'); wrap.className = 'fa-summary-table-wrap';
       const table = document.createElement('table'); table.className = 'fa-summary-table';
       const thead = document.createElement('thead'); const tr = document.createElement('tr'); thead.appendChild(tr);
