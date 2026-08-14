@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Fonte Antiga - Universe Overview
 // @namespace    fa.universe-overview
-// @version      2.36.0
+// @version      2.43.0
 // @description  Locally summarize observed planets, queues, buildings, and notification intelligence
 // @match        *://antiga.hatedabamboo.me/*
 // @grant        none
@@ -29,6 +29,8 @@
     id => `/planets/${id}/defenses`,
     id => `/planets/${id}/ships`,
   ];
+  const REFRESH_ENDPOINT_DELAY = 100;
+  const REFRESH_PLANET_DELAY = 500;
   const CATEGORY_BY_SUFFIX = {
     '': 'base',
     '/resources': 'resources',
@@ -63,13 +65,15 @@
     view: 'owned',
     page: 0,
     pageSize: 20,
-    sort: 'coordinates',
+    sort: 'name',
     sortDirection: 1,
     statusFilters: new Set(),
     featureFilters: new Set(),
     openFilterColumn: null,
     filterOutsideListenerInstalled: false,
     refreshing: new Set(),
+    refreshingAll: false,
+    refreshProgress: { completed: 0, total: 0, endpointCompleted: 0, endpointTotal: REFRESH_ENDPOINTS.length, current: '' },
     lastError: '',
     renderTimer: null,
     searchTimer: null,
@@ -362,11 +366,19 @@
     .fa-summary-tab:hover, .fa-summary-tab:focus-visible { opacity: 1; }
     .fa-summary-tab.active { color: var(--fg); border-color: var(--accent); background: var(--panel); opacity: 1; box-shadow: inset 0 -2px 0 var(--accent); }
     .fa-summary-toolbar { display: flex; align-items: center; gap: .5rem; width: 100%; }
+    .fa-summary-update-all { flex: 0 0 auto; white-space: nowrap; }
+    .fa-summary-update-all[hidden] { display: none !important; }
+    .fa-summary-bulk-controls { display: flex; flex: 0 0 auto; flex-direction: column; align-items: flex-end; gap: .25rem; min-width: 0; margin-left: auto; }
+    .fa-summary-progress { display: flex; flex: 0 1 auto; align-items: center; gap: .4rem; width: 18rem; min-width: 12rem; max-width: 100%; }
+    .fa-summary-progress[hidden] { display: none !important; }
+    .fa-summary-progress-bar { flex: 1 1 auto; width: 8rem; height: .7rem; accent-color: var(--accent); }
+    .fa-summary-progress-label { min-width: max-content; color: var(--muted); font-size: .72rem; white-space: nowrap; }
     .fa-summary-filter-head { display: flex; align-items: center; width: 100%; min-width: 0; gap: .3rem; box-sizing: border-box; white-space: nowrap; }
-    .fa-summary-filter-head > span:first-child { flex: 1 1 auto; min-width: 0; overflow: visible; text-overflow: clip; white-space: nowrap; line-height: 1.15; }
+    .fa-summary-filter-head > span:first-child { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; line-height: 1.15; }
     .fa-summary-filter-head .fa-summary-sort-indicator { flex: 0 0 1em; }
-    .fa-summary-table th.fa-summary-has-filter { padding-right: 1.6rem; }
-    .fa-summary-filter-button { position: absolute; top: 50%; right: .35rem; display: inline-flex !important; align-items: center; justify-content: center; width: 1.25rem; min-width: 1.25rem; height: 1.25rem; margin: 0; padding: .15rem; box-sizing: border-box; transform: translateY(-50%); border: 0; background: transparent; color: var(--muted); cursor: pointer; line-height: 1; }
+    .fa-summary-filter-head > .fa-summary-filter-button { flex: 0 0 1.25rem; }
+    .fa-summary-table th.fa-summary-has-filter { padding-right: .5rem; }
+    .fa-summary-filter-button { position: static; display: inline-flex !important; align-items: center; justify-content: center; width: 1.25rem; min-width: 1.25rem; height: 1.25rem; margin: 0; padding: .15rem; box-sizing: border-box; transform: none; border: 0; background: transparent; color: var(--muted); cursor: pointer; line-height: 1; }
     .fa-summary-filter-button:hover, .fa-summary-filter-button:focus-visible, .fa-summary-filter-button.fa-summary-filter-active { color: var(--accent); }
     .fa-summary-filter-button svg { display: block !important; width: 100%; height: 100%; fill: currentColor !important; overflow: visible; }
     .fa-summary-filter-menu { position: fixed; top: 0; left: 0; z-index: 100000; display: flex; visibility: hidden; flex-direction: column; gap: .35rem; min-width: 9rem; padding: .55rem .65rem; border: 1px solid var(--border-soft); border-radius: .2rem; background: var(--panel, #10151d); box-shadow: 0 .35rem .8rem rgba(0,0,0,.45); color: var(--fg); font-weight: 400; white-space: nowrap; }
@@ -386,6 +398,7 @@
     @media (max-width: 900px) {
       .fa-summary-toolbar { flex-wrap: wrap; }
       .fa-summary-search { flex: 1 1 14rem; width: auto; max-width: none; }
+      .fa-summary-bulk-controls { flex: 0 0 100%; }
     }
 
     .fa-summary-page-label { min-width: 6rem; text-align: center; color: var(--muted); font-size: .78rem; }
@@ -396,7 +409,7 @@
     .fa-summary-table th, .fa-summary-table td { box-sizing: border-box; padding: .45rem .5rem; vertical-align: top; border-bottom: 1px solid var(--border-soft); text-align: left; }
     .fa-summary-table th { overflow: visible; }
     .fa-summary-table td { overflow: hidden; }
-    .fa-summary-table td > div:not(.fa-summary-icon-line):not(.fa-summary-actions-inner) { overflow: hidden; text-overflow: ellipsis; }
+    .fa-summary-table td > div:not(.fa-summary-icon-line):not(.fa-summary-actions-inner):not(.fa-summary-name-content) { overflow: hidden; text-overflow: ellipsis; }
     .fa-summary-table .fa-summary-sub { overflow: hidden; text-overflow: ellipsis; }
     .fa-summary-table tbody td { position: relative; min-height: 0; }
     .fa-summary-table tbody td > .fa-summary-time { float: none; flex: none; }
@@ -409,6 +422,10 @@
     .fa-summary-table tbody tr.fa-summary-data-row { cursor: pointer; }
     .fa-summary-table tbody tr.fa-summary-data-row.fa-summary-row-expanded { background: var(--panel-alt); }
     .fa-summary-table .fa-summary-name { font-weight: 600; white-space: nowrap; }
+    .fa-summary-name-content { display: flex; flex-direction: column; align-items: stretch; gap: .25rem; min-width: 0; }
+    .fa-summary-name-content > .fa-summary-name { flex: 0 0 auto; min-width: 0; overflow: visible; text-overflow: clip; white-space: normal; overflow-wrap: anywhere; word-break: break-word; }
+    .fa-summary-name-content > .fa-summary-actions-inner { flex: 0 0 auto; width: 100%; justify-content: flex-start; }
+    .fa-summary-name-content .fa-summary-actions-inner button { flex: 0 0 1.8rem; }
     .fa-summary-number { width: 2.5rem; color: var(--muted); text-align: right !important; }
     .fa-summary-time { position: absolute !important; inset-inline-start: auto; inset-inline-end: .25rem; inset-block-end: .15rem; z-index: 0; display: block; width: max-content; max-width: calc(100% - .5rem); margin: 0; padding: .04rem .2rem; border: 1px solid var(--border-soft); border-radius: .15rem; background: var(--panel-alt) !important; color: var(--fg-dim, #8993a8) !important; font-size: .6rem; line-height: 1; white-space: nowrap; pointer-events: none; opacity: .9; contain: layout paint; }
     .fa-summary-time.fa-summary-time-stale { background: var(--fg) !important; border-color: var(--fg); color: var(--bg, #0a0d13) !important; opacity: 1; }
@@ -437,9 +454,8 @@
     }
     .fa-summary-queue-item { white-space: nowrap; }
     .fa-summary-queue-item.fa-summary-zero { color: var(--muted) !important; opacity: .2; }
-    .fa-summary-actions { width: 1%; white-space: nowrap; vertical-align: middle !important; }
     .fa-summary-actions-inner { display: flex; align-items: center; gap: .25rem; width: 100%; }
-    .fa-summary-actions button { display: inline-flex; flex: 1 1 0; align-items: center; justify-content: center; min-width: 0; height: 1.8rem; margin: 0; padding: 0; appearance: none; line-height: 1; }
+    .fa-summary-actions-inner button { display: inline-flex; flex: 1 1 0; align-items: center; justify-content: center; min-width: 0; height: 1.8rem; margin: 0; padding: 0; appearance: none; line-height: 1; }
     .fa-summary-action-glyph { display: block; font-size: 1rem; line-height: 1; pointer-events: none; }
     .fa-summary-icon-line { display: flex; align-items: center; min-width: 0; min-height: 1.25em; }
     .fa-summary-survivors { display: inline-flex; align-items: center; gap: .2rem; white-space: nowrap; }
@@ -1237,7 +1253,7 @@
       ['#', 'number'], ['Location', 'coordinates'], ['Planet', 'name'], ['Last exploration', 'explorationAt'], ['Size', 'sizeTotal'], ['Status', 'status'], ['Features', 'features'], ['Buildings', 'buildings'], ['Known fleet', 'knownFleet'], ['Known defense', 'knownDefense'], ['Metal', 'exploredMetal'], ['Silicon', 'exploredSilicon'], ['Helium', 'exploredHelium'], ['Debris M', 'debrisMetal'], ['Debris S', 'debrisSilicon'], ['Survivors', 'exploredSurvivors'],
     ];
     return [
-      ['#', 'number'], ['Location', 'coordinates'], ['Planet', 'name'], ['Size', 'sizeTotal'], ['Used size', 'sizeUsed'], ['Resources', 'resources'], ['Production / h', 'production'], ['Storage', 'storage'], ['Capacity', 'capacity'], ['Features', 'features'], ['Buildings', 'buildings'], ['Ships', 'ships'], ['Defenses', 'defenses'], ['Queues', 'queues'], ['Actions', 'actions'],
+      ['#', 'number'], ['Location', 'coordinates'], ['Planet', 'name'], ['Size', 'sizeTotal'], ['Used size', 'sizeUsed'], ['Resources', 'resources'], ['Production / h', 'production'], ['Storage', 'storage'], ['Capacity', 'capacity'], ['Features', 'features'], ['Buildings', 'buildings'], ['Ships', 'ships'], ['Defenses', 'defenses'], ['Queues', 'queues'],
     ];
   }
   function makeRow(record, rowNumber) {
@@ -1293,7 +1309,7 @@
     const featuresKnown = record.owned === true ? baseKnown : displayNotif?.exploration != null || displayNotif?.explorationLost === true;
     const cells = {
       number: cell(rowNumber, null),
-      name: cell(name, null, '', record.owned === true ? economyTimestamp(record) : undefined, record.owned === true ? economyTimestampTitle(record, economyTimestamp(record)) : undefined, record.owned === true),
+      name: cell(name, null, 'fa-summary-name', record.owned === true ? economyTimestamp(record) : undefined, record.owned === true ? economyTimestampTitle(record, economyTimestamp(record)) : undefined, record.owned === true),
       explorationAt: cell(record.owned === true ? '—' : (reportAt ? elapsedDetailed(reportAt) : '?'), null, reportAt ? '' : 'fa-summary-na', undefined, undefined, false),
       coordinates: coordinateCell(location),
       sizeUsed: cell(sizeKnown ? percent(usedSize, totalSize) : '?', null, usedSize == null || totalSize == null ? 'fa-summary-na' : ''),
@@ -1345,16 +1361,20 @@
       if (shipsKnown && !shipsTotal) cells.ships.classList.add('fa-summary-na');
       cells.queues = queueCell(record, { build: buildingQueueData == null ? null : buildingQueue.length, research: researchQueueData == null ? null : researchQueue.length, ships: shipQueueData == null ? null : shipQueue.length, defense: defenseQueueData == null ? null : defenseQueue.length }, queueObservedAt);
     }
-    const action = document.createElement('td'); action.className = 'fa-summary-actions';
-    const actionInner = document.createElement('div'); actionInner.className = 'fa-summary-actions-inner'; action.appendChild(actionInner);
-    if (record.owned === true && record.planetId != null) {
+    if (state.view === 'owned' && record.planetId != null) {
+      const actionInner = document.createElement('div'); actionInner.className = 'fa-summary-actions-inner';
       const updating = state.refreshing.has(record.planetId);
-      const update = actionButton('↻', updating ? 'Updating planet data…' : 'Update planet data', event => { event.stopPropagation(); manualRefresh(record); });
-      update.disabled = updating; actionInner.appendChild(update);
+      const blocked = updating || state.refreshingAll;
+      const update = actionButton('↻', blocked ? (state.refreshingAll ? 'Updating all planet data…' : 'Updating planet data…') : 'Update planet data', event => { event.stopPropagation(); manualRefresh(record); });
+      update.disabled = blocked; actionInner.appendChild(update);
       const move = actionButton('↗', 'Open planet', event => { event.stopPropagation(); closePanel(); if (typeof window.openPlanet === 'function') window.openPlanet(record.planetId); });
       actionInner.appendChild(move);
+      const nameContent = document.createElement('div'); nameContent.className = 'fa-summary-name-content';
+      const nameMain = cells.name.querySelector('.fa-summary-name');
+      if (nameMain) nameMain.remove();
+      nameContent.append(nameMain || document.createTextNode(''), actionInner);
+      cells.name.prepend(nameContent);
     }
-    if (state.view === 'owned') cells.actions = action;
     for (const [, key] of columnsForView()) { const current = cells[key]; if (current) { if (key === 'number') current.classList.add('fa-summary-number'); row.appendChild(current); } }
     return row;
   }
@@ -1422,12 +1442,12 @@
   function columnWidthWeight(key) {
     return {
       number: 42, name: 150, coordinates: 92, sizeUsed: 74, sizeTotal: 70,
-      status: 96, features: 64, resources: 124, production: 124, storage: 78,
+      status: 96, features: 96, resources: 124, production: 124, storage: 78,
       capacity: 180, buildings: 78, knownFleet: 78, knownDefense: 88, ships: 70, defenses: 78,
       exploredMetal: 78, exploredSilicon: 78, exploredHelium: 78,
       debrisMetal: 78, debrisSilicon: 78,
       exploredSurvivors: 96,
-      queues: 92, actions: 112,
+      queues: 92,
     }[key] || 100;
   }
   function applyColumnWidths(table, viewColumns) {
@@ -1439,6 +1459,20 @@
       const col = document.createElement('col'); col.style.width = `${columnWidthWeight(key)}px`; group.appendChild(col);
     });
     table.prepend(group);
+  }
+  function updateRefreshProgressUi() {
+    if (!state.panel) return;
+    const progressWrap = state.panel.querySelector('.fa-summary-progress');
+    if (!progressWrap) return;
+    const progress = progressWrap.querySelector('.fa-summary-progress-bar');
+    const progressLabel = progressWrap.querySelector('.fa-summary-progress-label');
+    if (!progress || !progressLabel) return;
+    const { completed, total, endpointCompleted, endpointTotal, current } = state.refreshProgress;
+    const fraction = total ? Math.min(1, (completed + endpointCompleted / Math.max(1, endpointTotal)) / total) : 0;
+    progressWrap.hidden = state.view !== 'owned' || !state.refreshingAll;
+    progress.value = fraction;
+    progressLabel.textContent = `${completed}/${total} planets${current ? ` · ${current}` : ''}`;
+    progressWrap.title = current ? `Updating ${current}` : 'Updating owned planets';
   }
   function renderTable() {
     if (!state.panel) return;
@@ -1460,10 +1494,23 @@
     const status = state.panel.querySelector('.fa-summary-status');
     if (status) {
       const shown = allRecords.length ? `${start + 1}–${Math.min(start + effectivePageSize, allRecords.length)}` : '0';
-      const statusText = `${allRecords.length} ${state.view === 'owned' ? 'owned' : 'explored'} planet${allRecords.length === 1 ? '' : 's'} · showing ${shown} · ${state.records.size} stored · Notifications ${state.notificationsLoaded ? 'loaded' : 'not available'}${state.lastError ? `\n${state.lastError}` : ''}`;
+      const storedCount = [...state.records.values()].filter(record => record.owned !== true && !isTradeGuildPlanetName(record.name) && recordNotifications(record)).length;
+      const cacheStatus = state.view === 'explored' ? ` · ${storedCount} explored cached · Notifications ${state.notificationsLoaded ? 'loaded' : 'not available'}` : '';
+      const statusText = `${allRecords.length} ${state.view === 'owned' ? 'owned' : 'explored'} planet${allRecords.length === 1 ? '' : 's'} · showing ${shown}${cacheStatus}${state.lastError ? `\n${state.lastError}` : ''}`;
       status.replaceChildren();
       const statusLabel = document.createElement('span'); statusLabel.className = 'fa-summary-status-text'; statusLabel.textContent = statusText; status.appendChild(statusLabel);
     }
+    const updateAll = state.panel.querySelector('.fa-summary-update-all');
+    if (updateAll) {
+      const bulkInProgress = state.refreshingAll;
+      const anotherUpdateInProgress = state.refreshing.size > 0;
+      updateAll.hidden = state.view !== 'owned';
+      updateAll.disabled = bulkInProgress || anotherUpdateInProgress;
+      updateAll.textContent = bulkInProgress ? 'Updating…' : 'Update all';
+      updateAll.title = bulkInProgress ? 'Updating owned planets…' : anotherUpdateInProgress ? 'Wait for the current planet update to finish' : 'Update all owned planets one by one';
+      updateAll.setAttribute('aria-busy', String(bulkInProgress));
+    }
+    updateRefreshProgressUi();
     const pageControl = state.panel.querySelector('.fa-summary-page');
     const pageLabel = state.panel.querySelector('.fa-summary-page-label');
     const previous = state.panel.querySelector('.fa-summary-page-prev');
@@ -1489,7 +1536,7 @@
       };
       viewColumns.forEach(([label, columnKey]) => {
         const th = document.createElement('th'); th.dataset.sort = columnKey; th.dataset.label = label; th.title = descriptions[columnKey] || label;
-        const sortableKey = columnKey === 'number' || columnKey === 'actions' ? null : columnKey;
+        const sortableKey = columnKey === 'number' ? null : columnKey;
         const head = document.createElement('span'); head.className = 'fa-summary-filter-head';
         const labelText = document.createElement('span'); labelText.textContent = label; head.appendChild(labelText);
         const indicator = document.createElement('span'); indicator.className = 'fa-summary-sort-indicator'; indicator.setAttribute('aria-hidden', 'true'); indicator.textContent = sortableKey === state.sort ? (state.sortDirection === 1 ? '↑' : '↓') : ''; head.appendChild(indicator); th.appendChild(head);
@@ -1551,32 +1598,72 @@
     });
     button.addEventListener('click', event => { event.stopPropagation(); const opening = menu.hidden; closeFilterMenus(); state.openFilterColumn = opening ? columnKey : null; menu.hidden = !opening; if (!menu.hidden) requestAnimationFrame(() => { positionFilterMenu(menu, button); menu.focus(); }); sync(); });
     menu.addEventListener('click', event => event.stopPropagation());
-    th.appendChild(button);
+    head.appendChild(button);
     document.body.appendChild(menu);
     if (!menu.hidden) requestAnimationFrame(() => { positionFilterMenu(menu, button); menu.focus(); });
     sync();
   }
-  function scheduleRender() { if (!state.panel || state.renderTimer) return; state.renderTimer = setTimeout(() => { state.renderTimer = null; renderTable(); }, 80); }
+  function scheduleRender() { if (!state.panel || state.refreshingAll || state.renderTimer) return; state.renderTimer = setTimeout(() => { state.renderTimer = null; renderTable(); }, 80); }
   function openPanel() { if (!state.panel) return; state.panel.classList.remove('hidden'); loadNotifications(); renderTable(); }
   function closePanel() { state.panel?.classList.add('hidden'); }
 
-  async function manualRefresh(record) {
-    if (!record.planetId || !window.req || state.refreshing.has(record.planetId)) return;
+  async function refreshPlanet(record, allowBulk = false) {
+    if (!record.planetId || !window.req || state.refreshing.has(record.planetId) || (state.refreshingAll && !allowBulk)) return [];
     const id = record.planetId;
-    state.refreshing.add(id); state.lastError = ''; renderTable();
+    state.refreshing.add(id); state.lastError = '';
+    if (!allowBulk) renderTable();
     const errors = [];
     try {
-      for (const makePath of REFRESH_ENDPOINTS) {
-        const path = makePath(id);
+      for (let endpointIndex = 0; endpointIndex < REFRESH_ENDPOINTS.length; endpointIndex += 1) {
+        const path = REFRESH_ENDPOINTS[endpointIndex](id);
         try {
           const result = statusBody(await window.req('GET', path));
           if (result.status < 200 || result.status >= 300) throw new Error(`HTTP ${result.status}`);
           await applyApiResponse(endpointUrl(`/api${path}`), result.status, result.body);
         } catch (error) { errors.push(`${path}: ${error.message}`); }
-        await new Promise(resolve => setTimeout(resolve, 100));
+        if (allowBulk) {
+          state.refreshProgress.endpointCompleted = endpointIndex + 1;
+          updateRefreshProgressUi();
+        }
+        await new Promise(resolve => setTimeout(resolve, REFRESH_ENDPOINT_DELAY));
       }
     } finally {
       state.refreshing.delete(id);
+      if (errors.length) state.lastError = errors.join('\n');
+      if (!allowBulk) renderTable();
+    }
+    return errors;
+  }
+
+  async function manualRefresh(record) {
+    await refreshPlanet(record);
+  }
+
+  async function refreshAllOwned() {
+    if (state.refreshingAll || state.refreshing.size > 0 || !window.req) return;
+    const records = sidebarPlanets().filter(record => record.owned === true && record.planetId != null);
+    if (!records.length) return;
+    if (state.renderTimer) { clearTimeout(state.renderTimer); state.renderTimer = null; }
+    state.refreshingAll = true;
+    state.refreshProgress = { completed: 0, total: records.length, endpointCompleted: 0, endpointTotal: REFRESH_ENDPOINTS.length, current: '' };
+    state.lastError = '';
+    renderTable();
+    const errors = [];
+    try {
+      for (let index = 0; index < records.length; index += 1) {
+        const record = records[index];
+        state.refreshProgress.current = record.name || `Planet ${record.system ?? '—'}-${record.position ?? '—'}`;
+        state.refreshProgress.endpointCompleted = 0;
+        updateRefreshProgressUi();
+        errors.push(...await refreshPlanet(record, true));
+        state.refreshProgress.completed = index + 1;
+        state.refreshProgress.endpointCompleted = 0;
+        updateRefreshProgressUi();
+        if (index < records.length - 1) await new Promise(resolve => setTimeout(resolve, REFRESH_PLANET_DELAY));
+      }
+    } finally {
+      state.refreshingAll = false;
+      state.refreshProgress.current = '';
       if (errors.length) state.lastError = errors.join('\n');
       renderTable();
     }
@@ -1599,7 +1686,7 @@
           state.view = view; state.page = 0; state.statusFilters.clear(); state.featureFilters.clear(); state.search = ''; closeFilterMenus();
           if (state.searchTimer) { clearTimeout(state.searchTimer); state.searchTimer = null; }
           search.value = ''; syncSearchClear();
-          state.sort = view === 'explored' ? 'explorationAt' : 'coordinates';
+          state.sort = view === 'explored' ? 'explorationAt' : 'name';
           state.sortDirection = view === 'explored' ? -1 : 1;
           renderTable();
         }); tabs.appendChild(tab);
@@ -1625,8 +1712,15 @@
       const pageLabel = document.createElement('span'); pageLabel.className = 'fa-summary-page-label';
       const next = document.createElement('button'); next.type = 'button'; next.className = 'fa-summary-page-next'; next.textContent = '→'; next.title = 'Next page'; next.addEventListener('click', () => { state.page += 1; renderTable(); });
       page.append(previous, pageLabel, next);
+      const updateAll = document.createElement('button'); updateAll.type = 'button'; updateAll.className = 'fa-summary-update-all'; updateAll.textContent = 'Update all'; updateAll.title = 'Update all owned planets one by one'; updateAll.addEventListener('click', refreshAllOwned);
+      const progressWrap = document.createElement('div'); progressWrap.className = 'fa-summary-progress'; progressWrap.hidden = true;
+      const progressBar = document.createElement('progress'); progressBar.className = 'fa-summary-progress-bar'; progressBar.max = 1; progressBar.value = 0; progressBar.setAttribute('aria-label', 'Planet update progress');
+      const progressLabel = document.createElement('span'); progressLabel.className = 'fa-summary-progress-label';
+      progressWrap.append(progressBar, progressLabel);
+      const bulkControls = document.createElement('div'); bulkControls.className = 'fa-summary-bulk-controls';
+      bulkControls.append(updateAll, progressWrap);
       const toolbar = document.createElement('div'); toolbar.className = 'fa-summary-toolbar';
-      toolbar.append(searchWrap, page);
+      toolbar.append(searchWrap, page, bulkControls);
       const status = document.createElement('div'); status.className = 'fa-summary-status';
       controls.append(tabs, toolbar, status);
       const wrap = document.createElement('div'); wrap.className = 'fa-summary-table-wrap';
