@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Fonte Antiga - Explore From Nearest Colony
 // @namespace    fa.galaxy-explore-nearest-colony
-// @version      1.1.0
+// @version      1.1.1
 // @description  Start Galaxy exploration missions from the closest owned colony
 // @match        *://antiga.hatedabamboo.me/*
 // @grant        none
@@ -50,6 +50,10 @@
             } catch (_) {}
           }
           if (typeof showScreen === 'function') showScreen('planet');
+          // openPlanet() normally starts the game's one-second fleet ticker and
+          // poll loop. This bridge intentionally skips openPlanet() so the
+          // dashboard is not refreshed, so restart those loops explicitly.
+          if (typeof startTicking === 'function') startTicking();
         });
       })();
     `;
