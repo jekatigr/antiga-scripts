@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Fonte Antiga - Universe Overview
 // @namespace    fa.universe-overview
-// @version      2.45.0
+// @version      2.50.0
 // @description  Locally summarize colonies with overview, building, ship, and defense inventory tabs
 // @match        *://antiga.hatedabamboo.me/*
 // @grant        none
@@ -68,6 +68,7 @@
     pageSize: 20,
     sort: 'name',
     sortDirection: 1,
+    sortActivated: false,
     statusFilters: new Set(),
     featureFilters: new Set(),
     openFilterColumn: null,
@@ -80,6 +81,7 @@
     searchTimer: null,
     renderedView: null,
     persistChain: Promise.resolve(),
+    lastOpenedPlanetId: null,
   };
 
   // Shared notification-cache service. This intentionally lives in every
@@ -456,6 +458,14 @@
     .fa-summary-table tbody tr:hover > td:has(> .fa-summary-na), .fa-summary-table tbody tr:hover > td:has(> .fa-summary-empty),
     .fa-summary-table tbody tr.fa-summary-row-expanded > td.fa-summary-na, .fa-summary-table tbody tr.fa-summary-row-expanded > td.fa-summary-empty,
     .fa-summary-table tbody tr.fa-summary-row-expanded > td:has(> .fa-summary-na), .fa-summary-table tbody tr.fa-summary-row-expanded > td:has(> .fa-summary-empty) { background: transparent !important; opacity: 1; }
+    .fa-summary-table tbody tr.fa-summary-row-current > td { background: rgba(var(--accent-rgb), .12) !important; }
+    .fa-summary-table tbody tr.fa-summary-row-current > td.fa-summary-planet-sticky { background: rgba(var(--accent-rgb), .12) !important; box-shadow: inset 3px 0 0 var(--accent), 1px 0 0 var(--border-soft); }
+    .fa-summary-table tbody tr.fa-summary-row-current:hover > td { background: var(--panel-alt) !important; }
+    .fa-summary-table tbody tr.fa-summary-row-current:hover > td.fa-summary-planet-sticky { background: var(--panel-alt) !important; }
+    .fa-summary-table tbody tr.fa-summary-row-current:hover > td.fa-summary-na,
+    .fa-summary-table tbody tr.fa-summary-row-current:hover > td.fa-summary-empty,
+    .fa-summary-table tbody tr.fa-summary-row-current:hover > td:has(> .fa-summary-na),
+    .fa-summary-table tbody tr.fa-summary-row-current:hover > td:has(> .fa-summary-empty) { background: var(--panel-alt) !important; opacity: 1; }
     .fa-summary-galaxy { color: var(--muted) !important; opacity: .25; }
     .fa-summary-queue-values { display: flex; flex-wrap: nowrap; gap: .2rem .3rem; min-width: 0; color: var(--fg); }
     .fa-summary-table td > .fa-summary-queue-values { overflow: visible !important; text-overflow: clip !important; }
@@ -503,6 +513,21 @@
 
   function now() { return Date.now(); }
   function number(value) { return typeof value === 'number' && Number.isFinite(value) ? value : Number(value) || 0; }
+  function lastOpenedOwnedPlanetId() {
+    const activePill = document.querySelector('#sidebar-planets .sidebar-planet-pill.active[data-planet-id]');
+    const activeId = Number(activePill?.dataset.planetId);
+    if (Number.isSafeInteger(activeId) && activeId > 0) {
+      state.lastOpenedPlanetId = activeId;
+      return activeId;
+    }
+    let savedId = null;
+    try {
+      const saved = localStorage.getItem('galaxygame_planet');
+      savedId = saved == null ? null : Number(saved);
+    } catch (_) {}
+    state.lastOpenedPlanetId = Number.isSafeInteger(savedId) && savedId > 0 ? savedId : null;
+    return state.lastOpenedPlanetId;
+  }
   function fmt(value) { return number(value).toLocaleString(); }
   function fmtMaybe(value, known = true) { return value == null || value === '' ? (known ? '—' : '?') : fmt(value); }
   function escapeText(value) { return value == null || value === '' ? '—' : String(value); }
@@ -1411,6 +1436,10 @@
     const row = document.createElement('tr');
     row.className = 'fa-summary-data-row';
     if (state.view === 'owned') row.classList.add('fa-summary-nonexpandable');
+    if (state.view === 'owned' && state.lastOpenedPlanetId === Number(record.planetId)) {
+      row.classList.add('fa-summary-row-current');
+      row.setAttribute('aria-current', 'true');
+    }
     if (state.view !== 'owned') {
       row.tabIndex = 0;
       row.setAttribute('role', 'button');
@@ -1581,6 +1610,7 @@
   }
   function matchingRecords() {
     sidebarPlanets();
+    lastOpenedOwnedPlanetId();
     canonicalizeRecords();
     const query = state.search.trim().toLowerCase();
     const unique = new Map();
@@ -1597,7 +1627,11 @@
     }
     const records = [...unique.values()];
     const sortValues = new Map(records.map(record => [record.key, columnSortValue(record, state.sort)]));
+    const currentPlanetId = state.view === 'owned' && !state.sortActivated ? state.lastOpenedPlanetId : null;
     return records.sort((a, b) => {
+      const aIsCurrent = currentPlanetId != null && Number(a.planetId) === currentPlanetId;
+      const bIsCurrent = currentPlanetId != null && Number(b.planetId) === currentPlanetId;
+      if (aIsCurrent !== bIsCurrent) return aIsCurrent ? -1 : 1;
       const left = sortValues.get(a.key), right = sortValues.get(b.key);
       return (left < right ? -1 : left > right ? 1 : 0) * state.sortDirection;
     });
@@ -1710,7 +1744,7 @@
         const head = document.createElement('span'); head.className = 'fa-summary-filter-head';
         const labelText = document.createElement('span'); labelText.textContent = label; head.appendChild(labelText);
         const indicator = document.createElement('span'); indicator.className = 'fa-summary-sort-indicator'; indicator.setAttribute('aria-hidden', 'true'); indicator.textContent = sortableKey === state.sort ? (state.sortDirection === 1 ? '↑' : '↓') : ''; head.appendChild(indicator); th.appendChild(head);
-        if (sortableKey) { th.classList.add('fa-summary-sortable'); th.setAttribute('aria-sort', sortableKey === state.sort ? (state.sortDirection === 1 ? 'ascending' : 'descending') : 'none'); th.addEventListener('click', () => { if (state.sort === sortableKey) state.sortDirection *= -1; else { state.sort = sortableKey; state.sortDirection = 1; } renderTable(); }); }
+        if (sortableKey) { th.classList.add('fa-summary-sortable'); th.setAttribute('aria-sort', sortableKey === state.sort ? (state.sortDirection === 1 ? 'ascending' : 'descending') : 'none'); th.addEventListener('click', () => { state.sortActivated = true; if (state.sort === sortableKey) state.sortDirection *= -1; else { state.sort = sortableKey; state.sortDirection = 1; } renderTable(); }); }
         headerRow.appendChild(th);
         addFilterMenu(th, columnKey);
       });
@@ -1876,6 +1910,7 @@
           search.value = ''; syncSearchClear();
           state.sort = view === 'explored' ? 'explorationAt' : 'name';
           state.sortDirection = view === 'explored' ? -1 : 1;
+          state.sortActivated = false;
           renderTable();
         }); tabs.appendChild(tab);
       });
@@ -1884,7 +1919,7 @@
         const tab = document.createElement('button'); tab.type = 'button'; tab.className = 'fa-summary-tab fa-summary-subtab'; tab.dataset.subview = subview; tab.textContent = label; tab.setAttribute('role', 'tab');
         tab.addEventListener('click', () => {
           state.view = 'owned'; state.ownedSubview = subview; state.page = 0; state.statusFilters.clear(); state.featureFilters.clear(); state.expanded.clear(); closeFilterMenus();
-          state.sort = 'name'; state.sortDirection = 1;
+          state.sort = 'name'; state.sortDirection = 1; state.sortActivated = false;
           renderTable();
         }); subTabs.appendChild(tab);
       });
@@ -1958,7 +1993,7 @@
         ensurePanel();
         observeDom();
       });
-      sidebarObserver.observe(sidebar, { childList: true, subtree: true });
+      sidebarObserver.observe(sidebar, { childList: true, subtree: true, attributes: true, attributeFilter: ['class'] });
       return true;
     };
     // Observe only the owned-planet sidebar. Watching the whole body caused
