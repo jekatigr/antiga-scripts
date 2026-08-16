@@ -58,7 +58,10 @@
   const state = {
     db: null,
     records: new Map(),
+    recordsNeedCanonicalize: false,
     notificationIndex: new Map(),
+    notificationByPlanetId: new Map(),
+    notificationByLocation: new Map(),
     notificationsLoaded: false,
     notificationSync: null,
     panel: null,
@@ -453,8 +456,10 @@
     }
 
     .fa-summary-page-label { min-width: 6rem; text-align: center; color: var(--muted); font-size: .78rem; }
-    .fa-summary-status { display: flex; align-items: center; gap: .5rem; flex: 1 1 100%; min-height: 1.1em; font-size: .78rem; white-space: pre-line; }
+    .fa-summary-status { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; flex: 1 1 100%; min-height: 1.1em; font-size: .78rem; white-space: pre-line; }
     .fa-summary-status-text { min-width: 0; }
+    .fa-summary-status .fa-summary-update-all { flex: 0 0 auto; margin-left: .5rem; }
+    .fa-summary-status .fa-summary-progress { flex: 0 1 18rem; width: 18rem; min-width: 12rem; max-width: 100%; margin-left: 0; }
     .fa-summary-sync-state { margin-left: auto; padding: .18rem .45rem; border: 1px solid currentColor; border-radius: .2rem; white-space: nowrap; font-size: .7rem; line-height: 1.1; }
     .fa-summary-sync-idle { color: var(--muted); }
     .fa-summary-sync-scheduled { color: #ffcc66; }
@@ -840,6 +845,7 @@
       record.key = record.planetId != null ? `planet:${Number(record.planetId)}` : group.coords || record.key;
       state.records.set(record.key, record);
     }
+    state.recordsNeedCanonicalize = false;
   }
   function mergeRecords(a, b) {
     const merged = { ...a, ...b, key: a.key, observed: { ...(a.observed || {}), ...(b.observed || {}) } };
@@ -866,16 +872,19 @@
         if (target && target !== existing) {
           state.records.set(desired, mergeRecords(target, existing));
           state.records.delete(existing.key);
+          state.recordsNeedCanonicalize = true;
           return state.records.get(desired);
         }
         state.records.delete(existing.key);
         existing.key = desired;
         state.records.set(desired, existing);
+        state.recordsNeedCanonicalize = true;
       }
       return existing;
     }
     const record = blankRecord(data);
     state.records.set(record.key, record);
+    state.recordsNeedCanonicalize = true;
     return record;
   }
   function touchRecord(record, category, value, endpoint, observedAt = new Date().toISOString()) {
@@ -1002,7 +1011,7 @@
   installFetchHook();
   installXhrHook();
 
-  function sidebarPlanets() {
+  function sidebarPlanets(shouldCanonicalize = true) {
     const result = [];
     document.querySelectorAll('#sidebar-planets .sidebar-planet-pill[data-planet-id]').forEach(pill => {
       const planetId = Number(pill.dataset.planetId);
@@ -1026,7 +1035,7 @@
       for (const record of state.records.values()) {
         if (record.planetId != null) record.owned = ownedIds.has(Number(record.planetId));
       }
-      canonicalizeRecords();
+      if (shouldCanonicalize) canonicalizeRecords();
     }
     return result;
   }
@@ -1138,7 +1147,17 @@
       });
       const index = new Map();
       notifications.forEach(notification => addNotification(index, notification));
+      const byPlanetId = new Map();
+      const byLocation = new Map();
+      for (const entry of index.values()) {
+        if (entry.planetId != null) byPlanetId.set(Number(entry.planetId), entry);
+        if (Number.isSafeInteger(Number(entry.system)) && Number.isSafeInteger(Number(entry.position))) {
+          byLocation.set(`location:${Number(entry.system)}:${Number(entry.position)}`, entry);
+        }
+      }
       state.notificationIndex = index;
+      state.notificationByPlanetId = byPlanetId;
+      state.notificationByLocation = byLocation;
       state.notificationsLoaded = true;
       for (const entry of index.values()) {
         const data = { planetId: entry.planetId, name: entry.name, galaxy: entry.galaxy, system: entry.system, position: entry.position, allowUnknownGalaxy: true };
@@ -1170,11 +1189,10 @@
     const direct = state.notificationIndex.get(record.key)
       || (record.planetId != null ? state.notificationIndex.get(`planet:${record.planetId}`) : null)
       || (locationKey ? state.notificationIndex.get(locationKey) : null);
-    if (direct) return direct;
-    if (record.planetId != null) {
-      for (const entry of state.notificationIndex.values()) if (Number(entry.planetId) === Number(record.planetId)) return entry;
-    }
-    return null;
+    return direct
+      || (record.planetId != null ? state.notificationByPlanetId.get(Number(record.planetId)) : null)
+      || (locationKey ? state.notificationByLocation.get(locationKey) : null)
+      || null;
   }
   function latestObservation(record) {
     return Object.values(record.observed || {}).reduce((latest, item) => !latest || new Date(item.observedAt) > new Date(latest) ? item.observedAt : latest, null);
@@ -1688,9 +1706,9 @@
     }
   }
   function matchingRecords() {
-    sidebarPlanets();
+    sidebarPlanets(false);
     lastOpenedOwnedPlanetId();
-    canonicalizeRecords();
+    if (state.recordsNeedCanonicalize) canonicalizeRecords();
     const query = state.search.trim().toLowerCase();
     const unique = new Map();
     for (const record of state.records.values()) {
@@ -1784,15 +1802,17 @@
       tbody.appendChild(makeRow(record, start + index + 1));
       if (state.view !== 'owned' && state.expanded.has(record.key)) tbody.appendChild(renderDetails(record, colspan));
     });
+    const updateAll = state.panel.querySelector('.fa-summary-update-all');
+    const progressWrap = state.panel.querySelector('.fa-summary-progress');
     const status = state.panel.querySelector('.fa-summary-status');
     if (status) {
       const shown = allRecords.length ? `${start + 1}–${Math.min(start + effectivePageSize, allRecords.length)}` : '0';
-      const storedCount = [...state.records.values()].filter(record => record.owned !== true && !isTradeGuildPlanetName(record.name) && recordNotifications(record)).length;
-      const cacheStatus = state.view === 'explored' ? ` · ${storedCount} explored cached · Notifications ${state.notificationsLoaded ? 'loaded' : 'not available'}` : '';
       const rangeText = pageCount > 1 ? ` · showing ${shown}` : '';
-      const statusText = `${allRecords.length} ${state.view === 'owned' ? 'owned' : 'explored'} planet${allRecords.length === 1 ? '' : 's'}${rangeText}${cacheStatus}${state.lastError ? `\n${state.lastError}` : ''}`;
+      const statusText = `${allRecords.length} ${state.view === 'owned' ? 'owned' : 'explored'} planet${allRecords.length === 1 ? '' : 's'}${rangeText}${state.lastError ? `\n${state.lastError}` : ''}`;
       status.replaceChildren();
       const statusLabel = document.createElement('span'); statusLabel.className = 'fa-summary-status-text'; statusLabel.textContent = statusText; status.appendChild(statusLabel);
+      if (updateAll) status.appendChild(updateAll);
+      if (progressWrap) status.appendChild(progressWrap);
       const syncDisplay = notificationSyncDisplay();
       const syncBadge = document.createElement('span');
       syncBadge.className = `fa-summary-sync-state fa-summary-sync-${syncDisplay.status}`;
@@ -1800,14 +1820,13 @@
       syncBadge.title = syncDisplay.title;
       status.appendChild(syncBadge);
     }
-    const updateAll = state.panel.querySelector('.fa-summary-update-all');
     if (updateAll) {
       const bulkInProgress = state.refreshingAll;
       const anotherUpdateInProgress = state.refreshing.size > 0;
       updateAll.hidden = state.view !== 'owned';
       updateAll.disabled = bulkInProgress || anotherUpdateInProgress;
-      updateAll.textContent = bulkInProgress ? 'Updating…' : 'Update all';
-      updateAll.title = bulkInProgress ? 'Updating owned planets…' : anotherUpdateInProgress ? 'Wait for the current planet update to finish' : 'Update all owned planets one by one';
+      updateAll.textContent = bulkInProgress ? 'Refreshing…' : 'Refresh all colonies';
+      updateAll.title = bulkInProgress ? 'Refreshing owned colonies…' : anotherUpdateInProgress ? 'Wait for the current colony refresh to finish' : 'Refresh all owned colonies one by one';
       updateAll.setAttribute('aria-busy', String(bulkInProgress));
     }
     updateRefreshProgressUi();
@@ -2042,16 +2061,15 @@
       const pageLabel = document.createElement('span'); pageLabel.className = 'fa-summary-page-label';
       const next = document.createElement('button'); next.type = 'button'; next.className = 'fa-summary-page-next'; next.textContent = '→'; next.title = 'Next page'; next.addEventListener('click', () => { state.page += 1; renderTable(); });
       page.append(previous, pageLabel, next);
-      const updateAll = document.createElement('button'); updateAll.type = 'button'; updateAll.className = 'fa-summary-update-all'; updateAll.textContent = 'Update all'; updateAll.title = 'Update all owned planets one by one'; updateAll.addEventListener('click', refreshAllOwned);
+      const updateAll = document.createElement('button'); updateAll.type = 'button'; updateAll.className = 'fa-summary-update-all'; updateAll.textContent = 'Refresh all colonies'; updateAll.title = 'Refresh all owned colonies one by one'; updateAll.addEventListener('click', refreshAllOwned);
       const progressWrap = document.createElement('div'); progressWrap.className = 'fa-summary-progress'; progressWrap.hidden = true;
       const progressBar = document.createElement('progress'); progressBar.className = 'fa-summary-progress-bar'; progressBar.max = 1; progressBar.value = 0; progressBar.setAttribute('aria-label', 'Planet update progress');
       const progressLabel = document.createElement('span'); progressLabel.className = 'fa-summary-progress-label';
       progressWrap.append(progressBar, progressLabel);
-      const bulkControls = document.createElement('div'); bulkControls.className = 'fa-summary-bulk-controls';
-      bulkControls.append(updateAll, progressWrap);
       const toolbar = document.createElement('div'); toolbar.className = 'fa-summary-toolbar';
-      toolbar.append(searchWrap, page, bulkControls);
+      toolbar.append(searchWrap, page);
       const status = document.createElement('div'); status.className = 'fa-summary-status';
+      status.append(updateAll, progressWrap);
       controls.append(tabs, subTabs, toolbar, status);
       const wrap = document.createElement('div'); wrap.className = 'fa-summary-table-wrap';
       const table = document.createElement('table'); table.className = 'fa-summary-table';
