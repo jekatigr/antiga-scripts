@@ -69,6 +69,13 @@
     search: '',
     view: 'owned',
     ownedSubview: 'overview',
+    // Keep inventory columns stable even when records are merged or reordered
+    // while the notification cache is being synchronized.
+    inventoryOrder: {
+      buildings: new Map(),
+      ships: new Map(),
+      defenses: new Map(),
+    },
     page: 0,
     pageSize: 20,
     sort: 'name',
@@ -1440,16 +1447,18 @@
     const spec = inventorySpec();
     if (!spec) return [];
     const catalog = new Map();
+    const orderByKey = state.inventoryOrder[state.ownedSubview];
     for (const record of state.records.values()) {
       if (record.owned !== true) continue;
       [valueFor(record, spec.dataKey), valueFor(record, spec.queueKey)].forEach(items => {
         if (!Array.isArray(items)) return;
-        items.forEach((item, index) => {
+        items.forEach(item => {
           const key = inventoryItemKey(spec, item);
           if (!key) return;
+          if (orderByKey && !orderByKey.has(key)) orderByKey.set(key, orderByKey.size);
           const label = String(spec.itemName(item));
           const current = catalog.get(key);
-          if (!current) catalog.set(key, { key, label, order: index });
+          if (!current) catalog.set(key, { key, label, order: orderByKey?.get(key) ?? 0 });
           else if (/^(Building|Ship|Defense)$/.test(current.label) && label !== current.label) current.label = label;
         });
       });
