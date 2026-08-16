@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Fonte Antiga - Notification Target Systems
 // @namespace    fa.notifications-target-systems
-// @version      1.6.0
+// @version      1.6.2
 // @description  Cache notifications locally and mark their target systems on the galaxy map
 // @match        *://antiga.hatedabamboo.me/*
 // @grant        none
@@ -49,10 +49,14 @@
     const PAGE_SIZE = 10;
     const PAGE_DELAY = 1000;
     const UPDATE_EVENT = 'fa-notifications-updated';
+    const SYNC_STATE_EVENT = 'fa-notifications-sync-state';
     const CHANNEL = 'fa.notifications';
     let dbPromise = null;
     let syncPromise = null;
+    let syncTimer = null;
+    let syncPending = false;
     let lastUnread = null;
+    let syncState = { state: 'idle', offset: 0, total: 0, cached: 0, error: '' };
     const channel = typeof BroadcastChannel === 'undefined' ? null : new BroadcastChannel(CHANNEL);
 
     function result(request) {
@@ -99,6 +103,12 @@
     function announce() {
       window.dispatchEvent(new Event(UPDATE_EVENT));
       try { channel?.postMessage({ type: UPDATE_EVENT }); } catch (_) {}
+    }
+    function setSyncState(stateName, changes = {}) {
+      syncState = { ...syncState, ...changes, state: stateName };
+      const detail = { ...syncState };
+      window.dispatchEvent(new CustomEvent(SYNC_STATE_EVENT, { detail }));
+      try { channel?.postMessage({ type: SYNC_STATE_EVENT, detail }); } catch (_) {}
     }
     function installPageNetworkBridge() {
       const script = document.createElement('script');
@@ -187,6 +197,7 @@
     async function sync() {
       if (syncPromise) return syncPromise;
       const runSync = async () => {
+        setSyncState('syncing', { offset: 0, total: 0, error: '' });
         const db = await openDb();
         const previous = await meta(db);
         const keys = new Set((await result(db.transaction(STORE, 'readonly').objectStore(STORE).getAllKeys())).map(String));
@@ -200,6 +211,7 @@
         let checkpointReached = !resumeId;
         let offset = 0;
         let current = await page(0);
+        setSyncState('syncing', { offset: 0, total: current.total, cached: keys.size });
         await saveMeta(db, { status: 'syncing', total: current.total, nextOffset: 0 });
         while (current.itemCount > 0) {
           const notifications = current.notifications;
@@ -232,12 +244,15 @@
           await saveMeta(db, {
             status: 'syncing', total: current.total, cached: keys.size, nextOffset: offset, ...checkpoint,
           });
+          setSyncState('syncing', { offset, total: current.total, cached: keys.size });
           if (boundaryIndex >= 0 || offset >= current.total) break;
           await new Promise(resolve => setTimeout(resolve, PAGE_DELAY));
           current = await page(offset);
         }
         await saveMeta(db, { status: 'complete', total: current.total, cached: keys.size, nextOffset: offset, updatedAt: new Date().toISOString() });
+        setSyncState('complete', { offset, total: current.total, cached: keys.size, error: '' });
         announce();
+        return true;
       };
       const execute = async () => {
         if (navigator.locks && typeof navigator.locks.request === 'function') {
@@ -248,10 +263,35 @@
         }
         return runSync();
       };
-      syncPromise = execute().catch(() => {}).finally(() => {
-        syncPromise = null;
-      });
+      syncPromise = execute()
+        .then(result => {
+          if (result === undefined) setSyncState('idle');
+          return result;
+        })
+        .catch(error => {
+          setSyncState('error', { error: error?.message || 'Notification sync failed.' });
+        })
+        .finally(() => {
+          syncPromise = null;
+        });
       return syncPromise;
+    }
+    function scheduleSync(delay = 1500) {
+      if (syncPromise) {
+        syncPending = true;
+        return;
+      }
+      if (syncTimer) return;
+      setSyncState('scheduled', { error: '' });
+      syncTimer = setTimeout(() => {
+        syncTimer = null;
+        sync().finally(() => {
+          if (syncPending) {
+            syncPending = false;
+            scheduleSync(500);
+          }
+        });
+      }, delay);
     }
     async function poll(body) {
       const unread = Number(body && body.notifications_unread);
@@ -261,10 +301,7 @@
       const old = lastUnread == null ? Number(saved && saved.unreadCount) : lastUnread;
       lastUnread = unread;
       await saveMeta(db, { unreadCount: unread });
-      // Only start another synchronization when the unread count increases.
-      // Do not queue a second full sync while the initial backfill is still
-      // running; otherwise each poll restarts the pagination after completion.
-      if (Number.isFinite(old) && unread > old && !syncPromise) sync();
+      if (Number.isFinite(old) && unread > old) scheduleSync(500);
     }
     function inspect(url, response) {
       if (!response || !response.ok) return;
@@ -301,8 +338,10 @@
       };
       XMLHttpRequest.prototype.__faNotificationCache = true;
     }
-    window[SERVICE_KEY] = { sync };
-    sync();
+    // Start a delayed, serialized backfill so the game's initial rendering and
+    // requests get priority. Later unread increases schedule a short sync.
+    window[SERVICE_KEY] = { sync, getSyncState: () => ({ ...syncState }) };
+    scheduleSync(1500);
   })();
 
   const style = document.createElement('style');
@@ -435,7 +474,10 @@
 
     const summary = filter.querySelector('.fa-target-filter-summary');
     if (summary) {
-      summary.innerHTML = FILTER_ICON_HTML;
+      // Replacing the SVG on every body mutation feeds the observer that
+      // calls this function. Keep the existing icon unless the control was
+      // actually rebuilt.
+      if (!summary.querySelector('svg')) summary.innerHTML = FILTER_ICON_HTML;
       summary.title = `Notification filters (${selectedTypes.size}/${NOTIFICATION_TYPES.length} selected)`;
       summary.setAttribute('aria-label', summary.title);
     }
@@ -673,7 +715,9 @@
           ctx.restore();
         }
         function redraw() {
-          if (typeof window.drawGalaxyMap === 'function') window.drawGalaxyMap();
+          // The base map is already painted by the game (or by the
+          // full-width companion). Repaint only our overlay to avoid a second
+          // expensive canvas render for every filter/resize event.
           drawTargetSystems();
         }
         function install() {

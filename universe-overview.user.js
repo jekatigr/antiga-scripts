@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Fonte Antiga - Universe Overview
 // @namespace    fa.universe-overview
-// @version      2.50.0
+// @version      2.52.0
 // @description  Locally summarize colonies with overview, building, ship, and defense inventory tabs
 // @match        *://antiga.hatedabamboo.me/*
 // @grant        none
@@ -17,6 +17,7 @@
   const METADATA_STORE = 'metadata';
   const NOTIFICATION_DB_NAME = 'fa.notifications';
   const NOTIFICATION_STORE = 'notifications';
+  const NOTIFICATION_SYNC_STATE_EVENT = 'fa-notifications-sync-state';
   // req() expects application paths and adds /api itself.
   const REFRESH_ENDPOINTS = [
     id => `/planets/${id}`,
@@ -59,6 +60,7 @@
     records: new Map(),
     notificationIndex: new Map(),
     notificationsLoaded: false,
+    notificationSync: null,
     panel: null,
     expanded: new Set(),
     search: '',
@@ -82,6 +84,10 @@
     renderedView: null,
     persistChain: Promise.resolve(),
     lastOpenedPlanetId: null,
+    sidebarSignature: '',
+    sidebarSyncTimer: null,
+    notificationsLoadPromise: null,
+    notificationsLoadQueued: false,
   };
 
   // Shared notification-cache service. This intentionally lives in every
@@ -97,10 +103,14 @@
     const PAGE_SIZE = 10;
     const PAGE_DELAY = 1000;
     const UPDATE_EVENT = 'fa-notifications-updated';
+    const SYNC_STATE_EVENT = 'fa-notifications-sync-state';
     const CHANNEL = 'fa.notifications';
     let dbPromise = null;
     let syncPromise = null;
+    let syncTimer = null;
+    let syncPending = false;
     let lastUnread = null;
+    let syncState = { state: 'idle', offset: 0, total: 0, cached: 0, error: '' };
     const channel = typeof BroadcastChannel === 'undefined' ? null : new BroadcastChannel(CHANNEL);
 
     function result(request) {
@@ -147,6 +157,12 @@
     function announce() {
       window.dispatchEvent(new Event(UPDATE_EVENT));
       try { channel?.postMessage({ type: UPDATE_EVENT }); } catch (_) {}
+    }
+    function setSyncState(stateName, changes = {}) {
+      syncState = { ...syncState, ...changes, state: stateName };
+      const detail = { ...syncState };
+      window.dispatchEvent(new CustomEvent(SYNC_STATE_EVENT, { detail }));
+      try { channel?.postMessage({ type: SYNC_STATE_EVENT, detail }); } catch (_) {}
     }
     function installPageNetworkBridge() {
       const script = document.createElement('script');
@@ -235,6 +251,7 @@
     async function sync() {
       if (syncPromise) return syncPromise;
       const runSync = async () => {
+        setSyncState('syncing', { offset: 0, total: 0, error: '' });
         const db = await openDb();
         const previous = await meta(db);
         const keys = new Set((await result(db.transaction(STORE, 'readonly').objectStore(STORE).getAllKeys())).map(String));
@@ -248,6 +265,7 @@
         let checkpointReached = !resumeId;
         let offset = 0;
         let current = await page(0);
+        setSyncState('syncing', { offset: 0, total: current.total, cached: keys.size });
         await saveMeta(db, { status: 'syncing', total: current.total, nextOffset: 0 });
         while (current.itemCount > 0) {
           const notifications = current.notifications;
@@ -280,12 +298,15 @@
           await saveMeta(db, {
             status: 'syncing', total: current.total, cached: keys.size, nextOffset: offset, ...checkpoint,
           });
+          setSyncState('syncing', { offset, total: current.total, cached: keys.size });
           if (boundaryIndex >= 0 || offset >= current.total) break;
           await new Promise(resolve => setTimeout(resolve, PAGE_DELAY));
           current = await page(offset);
         }
         await saveMeta(db, { status: 'complete', total: current.total, cached: keys.size, nextOffset: offset, updatedAt: new Date().toISOString() });
+        setSyncState('complete', { offset, total: current.total, cached: keys.size, error: '' });
         announce();
+        return true;
       };
       const execute = async () => {
         if (navigator.locks && typeof navigator.locks.request === 'function') {
@@ -296,10 +317,35 @@
         }
         return runSync();
       };
-      syncPromise = execute().catch(() => {}).finally(() => {
-        syncPromise = null;
-      });
+      syncPromise = execute()
+        .then(result => {
+          if (result === undefined) setSyncState('idle');
+          return result;
+        })
+        .catch(error => {
+          setSyncState('error', { error: error?.message || 'Notification sync failed.' });
+        })
+        .finally(() => {
+          syncPromise = null;
+        });
       return syncPromise;
+    }
+    function scheduleSync(delay = 1500) {
+      if (syncPromise) {
+        syncPending = true;
+        return;
+      }
+      if (syncTimer) return;
+      setSyncState('scheduled', { error: '' });
+      syncTimer = setTimeout(() => {
+        syncTimer = null;
+        sync().finally(() => {
+          if (syncPending) {
+            syncPending = false;
+            scheduleSync(500);
+          }
+        });
+      }, delay);
     }
     async function poll(body) {
       const unread = Number(body && body.notifications_unread);
@@ -309,10 +355,7 @@
       const old = lastUnread == null ? Number(saved && saved.unreadCount) : lastUnread;
       lastUnread = unread;
       await saveMeta(db, { unreadCount: unread });
-      // Only start another synchronization when the unread count increases.
-      // Do not queue a second full sync while the initial backfill is still
-      // running; otherwise each poll restarts the pagination after completion.
-      if (Number.isFinite(old) && unread > old && !syncPromise) sync();
+      if (Number.isFinite(old) && unread > old) scheduleSync(500);
     }
     function inspect(url, response) {
       if (!response || !response.ok) return;
@@ -349,8 +392,10 @@
       };
       XMLHttpRequest.prototype.__faNotificationCache = true;
     }
-    window[SERVICE_KEY] = { sync };
-    sync();
+    // Start a delayed, serialized backfill so the game's initial rendering and
+    // requests get priority. Later unread increases schedule a short sync.
+    window[SERVICE_KEY] = { sync, getSyncState: () => ({ ...syncState }) };
+    scheduleSync(1500);
   })();
 
   const style = document.createElement('style');
@@ -410,6 +455,13 @@
     .fa-summary-page-label { min-width: 6rem; text-align: center; color: var(--muted); font-size: .78rem; }
     .fa-summary-status { display: flex; align-items: center; gap: .5rem; flex: 1 1 100%; min-height: 1.1em; font-size: .78rem; white-space: pre-line; }
     .fa-summary-status-text { min-width: 0; }
+    .fa-summary-sync-state { margin-left: auto; padding: .18rem .45rem; border: 1px solid currentColor; border-radius: .2rem; white-space: nowrap; font-size: .7rem; line-height: 1.1; }
+    .fa-summary-sync-idle { color: var(--muted); }
+    .fa-summary-sync-scheduled { color: #ffcc66; }
+    .fa-summary-sync-syncing { color: var(--accent); }
+    .fa-summary-sync-complete { color: #9be37a; }
+    .fa-summary-sync-error { color: #ff8d8d; }
+
     .fa-summary-table-wrap { overflow: auto; container-type: inline-size; }
     .fa-summary-table { width: 100%; min-width: 0; table-layout: fixed; border-collapse: collapse; font-size: .78rem; }
     .fa-summary-table th, .fa-summary-table td { box-sizing: border-box; padding: .45rem .5rem; vertical-align: top; border-bottom: 1px solid var(--border-soft); text-align: left; }
@@ -760,19 +812,26 @@
   }
   function canonicalizeRecords() {
     const groups = [];
+    const byId = new Map();
+    const byCoords = new Map();
     for (const source of state.records.values()) {
       const record = { ...source, observed: { ...(source.observed || {}) } };
       if (record.owned === true && !validGalaxy(record.galaxy)) record.galaxy = 1;
       if (record.galaxy != null && !validGalaxy(record.galaxy)) record.galaxy = null;
       const recordId = record.planetId == null ? null : Number(record.planetId);
       const recordCoords = coords(record.galaxy, record.system, record.position);
-      const existing = groups.find(group => (recordId != null && group.planetId === recordId) || (recordCoords && group.coords === recordCoords));
+      const existing = (recordId != null && byId.get(recordId)) || (recordCoords && byCoords.get(recordCoords));
       if (existing) {
         existing.record = mergeRecords(existing.record, record);
         existing.planetId = existing.record.planetId == null ? existing.planetId : Number(existing.record.planetId);
         existing.coords = coords(existing.record.galaxy, existing.record.system, existing.record.position) || existing.coords;
+        if (existing.planetId != null) byId.set(existing.planetId, existing);
+        if (existing.coords) byCoords.set(existing.coords, existing);
       } else {
-        groups.push({ record, planetId: recordId, coords: recordCoords });
+        const group = { record, planetId: recordId, coords: recordCoords };
+        groups.push(group);
+        if (recordId != null) byId.set(recordId, group);
+        if (recordCoords) byCoords.set(recordCoords, group);
       }
     }
     state.records.clear();
@@ -1051,8 +1110,13 @@
     }
   }
   async function loadNotifications() {
-    if (!window.indexedDB) return;
-    try {
+    if (state.notificationsLoadPromise) {
+      state.notificationsLoadQueued = true;
+      return state.notificationsLoadPromise;
+    }
+    const load = async () => {
+      if (!window.indexedDB) return;
+      try {
       if (indexedDB.databases) {
         const databases = await indexedDB.databases();
         if (!databases.some(item => item.name === NOTIFICATION_DB_NAME)) return;
@@ -1077,12 +1141,27 @@
       state.notificationIndex = index;
       state.notificationsLoaded = true;
       for (const entry of index.values()) {
-        const record = getOrCreateRecord({ planetId: entry.planetId, name: entry.name, galaxy: entry.galaxy, system: entry.system, position: entry.position, allowUnknownGalaxy: true });
-        if (entry.name && !record.name) record.name = entry.name;
-        await saveRecord(record);
+        const data = { planetId: entry.planetId, name: entry.name, galaxy: entry.galaxy, system: entry.system, position: entry.position, allowUnknownGalaxy: true };
+        const existed = findRecord(data);
+        const record = getOrCreateRecord(data);
+        let changed = !existed;
+        if (entry.name && !record.name) {
+          record.name = entry.name;
+          changed = true;
+        }
+        if (changed) await saveRecord(record);
       }
       scheduleRender();
-    } catch (error) { state.lastError = `Notifications: ${error.message}`; }
+      } catch (error) { state.lastError = `Notifications: ${error.message}`; }
+    };
+    state.notificationsLoadPromise = load().finally(() => {
+      state.notificationsLoadPromise = null;
+      if (state.notificationsLoadQueued) {
+        state.notificationsLoadQueued = false;
+        setTimeout(() => loadNotifications(), 100);
+      }
+    });
+    return state.notificationsLoadPromise;
   }
 
   function recordNotifications(record) {
@@ -1669,6 +1748,19 @@
     progressLabel.textContent = `${completed}/${total} planets${current ? ` · ${current}` : ''}`;
     progressWrap.title = current ? `Updating ${current}` : 'Updating owned planets';
   }
+  function notificationSyncDisplay() {
+    const sync = state.notificationSync || { state: 'idle' };
+    const status = ['scheduled', 'syncing', 'complete', 'error'].includes(sync.state) ? sync.state : 'idle';
+    if (status === 'scheduled') return { status, text: 'Notifications: scheduled', title: 'Notification synchronization is queued.' };
+    if (status === 'syncing') {
+      const progress = sync.total > 0 ? ` ${Math.min(sync.offset || 0, sync.total)}/${sync.total}` : '…';
+      return { status, text: `Notifications: syncing${progress}`, title: 'Notification history is being synchronized in the background.' };
+    }
+    if (status === 'complete') return { status, text: `Notifications: synced${sync.cached != null ? ` · ${sync.cached} cached` : ''}`, title: 'Notification cache is synchronized.' };
+    if (status === 'error') return { status, text: 'Notifications: sync error', title: sync.error || 'Notification synchronization failed.' };
+    return { status, text: 'Notifications: idle', title: 'Notification synchronization is idle.' };
+  }
+
   function renderTable() {
     if (!state.panel) return;
     const tableWrap = state.panel.querySelector('.fa-summary-table-wrap');
@@ -1701,6 +1793,12 @@
       const statusText = `${allRecords.length} ${state.view === 'owned' ? 'owned' : 'explored'} planet${allRecords.length === 1 ? '' : 's'}${rangeText}${cacheStatus}${state.lastError ? `\n${state.lastError}` : ''}`;
       status.replaceChildren();
       const statusLabel = document.createElement('span'); statusLabel.className = 'fa-summary-status-text'; statusLabel.textContent = statusText; status.appendChild(statusLabel);
+      const syncDisplay = notificationSyncDisplay();
+      const syncBadge = document.createElement('span');
+      syncBadge.className = `fa-summary-sync-state fa-summary-sync-${syncDisplay.status}`;
+      syncBadge.textContent = syncDisplay.text;
+      syncBadge.title = syncDisplay.title;
+      status.appendChild(syncBadge);
     }
     const updateAll = state.panel.querySelector('.fa-summary-update-all');
     if (updateAll) {
@@ -1967,15 +2065,41 @@
 
   function observeDom() {
     ensurePanel();
-    sidebarPlanets().forEach(saveRecord);
+    const records = sidebarPlanets();
+    const signature = records.map(record => [
+      record.planetId,
+      record.name || '',
+      record.system ?? '',
+      record.position ?? '',
+    ].join(':')).join('|');
+    if (signature !== state.sidebarSignature) {
+      state.sidebarSignature = signature;
+      records.forEach(saveRecord);
+    }
     scheduleRender();
   }
+
+  function scheduleSidebarSync() {
+    if (state.sidebarSyncTimer) return;
+    state.sidebarSyncTimer = setTimeout(() => {
+      state.sidebarSyncTimer = null;
+      observeDom();
+    }, 100);
+  }
+  function handleNotificationSyncState(detail) {
+    if (!detail || typeof detail !== 'object') return;
+    state.notificationSync = { ...detail };
+    scheduleRender();
+  }
+  state.notificationSync = window.__faNotificationCacheService?.getSyncState?.() || { state: 'idle' };
+  window.addEventListener(NOTIFICATION_SYNC_STATE_EVENT, event => handleNotificationSyncState(event.detail));
   window.addEventListener('fa-notifications-updated', () => loadNotifications());
   if (typeof BroadcastChannel !== 'undefined') {
     try {
       const notificationChannel = new BroadcastChannel('fa.notifications');
       notificationChannel.addEventListener('message', event => {
         if (event.data && event.data.type === 'fa-notifications-updated') loadNotifications();
+        if (event.data && event.data.type === NOTIFICATION_SYNC_STATE_EVENT) handleNotificationSyncState(event.data.detail);
       });
     } catch (_) {}
   }
@@ -1991,7 +2115,7 @@
       if (sidebarObserver) sidebarObserver.disconnect();
       sidebarObserver = new MutationObserver(() => {
         ensurePanel();
-        observeDom();
+        scheduleSidebarSync();
       });
       sidebarObserver.observe(sidebar, { childList: true, subtree: true, attributes: true, attributeFilter: ['class'] });
       return true;

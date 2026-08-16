@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Fonte Antiga - Dashboard Resource Separators
 // @namespace    fa.dashboard-resource-separators
-// @version      1.2.0
+// @version      1.2.1
 // @description  Add space separators to available and storage resource amounts on the dashboard
 // @match        *://antiga.hatedabamboo.me/*
 // @grant        none
@@ -42,7 +42,10 @@
   }
 
   function update() {
-    const resourceBars = document.querySelectorAll('#resource-bars .res-bar-text, .res-bar-text');
+    const container = document.querySelector('#resource-bars');
+    const resourceBars = container
+      ? container.querySelectorAll('.res-bar-text')
+      : document.querySelectorAll('.res-bar-text');
     resourceBars.forEach((element) => {
       const match = element.textContent.match(RESOURCE_VALUE);
       // The game may replace the text node in several steps. Keep the last
@@ -67,9 +70,15 @@
     });
   }
 
+  let timer = null;
   function schedule() {
-    // MutationObserver runs before the next paint, so update synchronously.
-    update();
+    // Coalesce the game's frequent resource text mutations. Running a full
+    // selector scan synchronously for every mutation competes with gameplay.
+    if (timer) clearTimeout(timer);
+    timer = setTimeout(() => {
+      timer = null;
+      update();
+    }, 100);
   }
 
   function start() {
