@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Fonte Antiga - Dashboard Resource Separators
 // @namespace    fa.dashboard-resource-separators
-// @version      1.2.1
+// @version      1.3.0
 // @description  Add space separators to available and storage resource amounts on the dashboard
 // @match        *://antiga.hatedabamboo.me/*
 // @grant        none
@@ -41,58 +41,80 @@
     );
   }
 
-  function update() {
-    const container = document.querySelector('#resource-bars');
+  function updateElement(element) {
+    const match = element.textContent.match(RESOURCE_VALUE);
+    // The game may replace the text node in several steps. Keep the last
+    // formatted pseudo-value during a transient incomplete value instead of
+    // revealing the raw text for a frame.
+    if (!match) return;
+
+    // Capture the original styles only once. Removing the class on every
+    // update briefly paints the game's unformatted value and causes flicker.
+    if (!element.classList.contains('fa-resource-separators')) {
+      const computed = getComputedStyle(element);
+      element.style.setProperty('--fa-resource-color', computed.color);
+      element.style.setProperty('--fa-resource-font-family', computed.fontFamily);
+      element.style.setProperty('--fa-resource-font-size', computed.fontSize);
+      element.style.setProperty('--fa-resource-font-style', computed.fontStyle);
+      element.style.setProperty('--fa-resource-font-weight', computed.fontWeight);
+      element.style.setProperty('--fa-resource-letter-spacing', computed.letterSpacing);
+      element.style.setProperty('--fa-resource-line-height', computed.lineHeight);
+    }
+    element.dataset.faResourceText = formatResourceText(element.textContent);
+    element.classList.add('fa-resource-separators');
+  }
+
+  function update(container = document.querySelector('#resource-bars')) {
     const resourceBars = container
       ? container.querySelectorAll('.res-bar-text')
       : document.querySelectorAll('.res-bar-text');
-    resourceBars.forEach((element) => {
-      const match = element.textContent.match(RESOURCE_VALUE);
-      // The game may replace the text node in several steps. Keep the last
-      // formatted pseudo-value during a transient incomplete value instead of
-      // revealing the raw text for a frame.
-      if (!match) return;
-
-      // Capture the original styles only once. Removing the class on every
-      // update briefly paints the game's unformatted value and causes flicker.
-      if (!element.classList.contains('fa-resource-separators')) {
-        const computed = getComputedStyle(element);
-        element.style.setProperty('--fa-resource-color', computed.color);
-        element.style.setProperty('--fa-resource-font-family', computed.fontFamily);
-        element.style.setProperty('--fa-resource-font-size', computed.fontSize);
-        element.style.setProperty('--fa-resource-font-style', computed.fontStyle);
-        element.style.setProperty('--fa-resource-font-weight', computed.fontWeight);
-        element.style.setProperty('--fa-resource-letter-spacing', computed.letterSpacing);
-        element.style.setProperty('--fa-resource-line-height', computed.lineHeight);
-      }
-      element.dataset.faResourceText = formatResourceText(element.textContent);
-      element.classList.add('fa-resource-separators');
-    });
+    resourceBars.forEach(updateElement);
   }
 
-  let timer = null;
-  function schedule() {
-    // Coalesce the game's frequent resource text mutations. Running a full
-    // selector scan synchronously for every mutation competes with gameplay.
-    if (timer) clearTimeout(timer);
-    timer = setTimeout(() => {
-      timer = null;
-      update();
-    }, 100);
+  function updateAffected(records) {
+    const resourceBars = new Set();
+    for (const record of records) {
+      const target = record.target.nodeType === 1 ? record.target : record.target.parentElement;
+      const targetBar = target?.closest('.res-bar-text');
+      if (targetBar) resourceBars.add(targetBar);
+      if (record.type !== 'childList') continue;
+      record.addedNodes.forEach(node => {
+        if (node.nodeType !== 1) return;
+        if (node.matches('.res-bar-text')) resourceBars.add(node);
+        node.querySelectorAll('.res-bar-text').forEach(element => resourceBars.add(element));
+      });
+    }
+    resourceBars.forEach(updateElement);
   }
 
   function start() {
-    update();
+    const shell = document.querySelector('#game-layout') || document.body;
+    let resourceContainer = null;
+    let resourceObserver = null;
 
-    const observer = new MutationObserver(schedule);
-    // Observe the stable game shell so replacing #resource-bars during SPA
-    // navigation does not detach the observer.
-    const observeTarget = document.querySelector('#game-layout') || document.body;
-    observer.observe(observeTarget, {
-      childList: true,
-      characterData: true,
-      subtree: true,
-    });
+    function attachResourceObserver() {
+      const nextContainer = shell.querySelector('#resource-bars');
+      if (nextContainer === resourceContainer) return;
+      resourceObserver?.disconnect();
+      resourceContainer = nextContainer;
+      if (!resourceContainer) {
+        update();
+        return;
+      }
+      update(resourceContainer);
+      resourceObserver = new MutationObserver(updateAffected);
+      resourceObserver.observe(resourceContainer, {
+        childList: true,
+        characterData: true,
+        subtree: true,
+      });
+    }
+
+    // Watch only for replacement of the resource container. Actual number
+    // updates are handled by the narrowly scoped observer above.
+    const shellObserver = new MutationObserver(attachResourceObserver);
+    shellObserver.observe(shell, { childList: true, subtree: true });
+    attachResourceObserver();
   }
 
   if (document.body) {
