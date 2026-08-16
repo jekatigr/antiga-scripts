@@ -493,10 +493,10 @@
     .fa-summary-table tbody tr.fa-summary-data-row.fa-summary-nonexpandable { cursor: default; }
     .fa-summary-table tbody tr.fa-summary-data-row.fa-summary-row-expanded { background: var(--panel-alt); }
     .fa-summary-table .fa-summary-name { font-weight: 600; white-space: nowrap; }
-    .fa-summary-name-content { display: flex; flex-direction: column; align-items: stretch; gap: .25rem; min-width: 0; }
-    .fa-summary-name-content > .fa-summary-name { flex: 0 0 auto; min-width: 0; overflow: visible; text-overflow: clip; white-space: normal; overflow-wrap: anywhere; word-break: break-word; }
-    .fa-summary-name-content > .fa-summary-actions-inner { flex: 0 0 auto; width: 100%; justify-content: flex-start; }
-    .fa-summary-name-content .fa-summary-actions-inner button { flex: 0 0 1.8rem; }
+    .fa-summary-name-content { display: flex; align-items: center; gap: .4rem; min-width: 0; }
+    .fa-summary-name-content > .fa-summary-name { flex: 1 1 auto; min-width: 0; overflow: visible; text-overflow: clip; white-space: normal; overflow-wrap: anywhere; word-break: break-word; }
+    .fa-summary-name-content > .fa-summary-actions-inner { flex: 0 0 auto; width: auto; margin-left: auto; justify-content: flex-start; }
+    .fa-summary-name-content .fa-summary-actions-inner button { flex: 0 0 1.8rem !important; width: 1.8rem !important; min-width: 1.8rem !important; max-width: 1.8rem !important; box-sizing: border-box; }
     .fa-summary-number { width: 2.5rem; color: var(--muted); text-align: right !important; }
     .fa-summary-time { position: absolute !important; inset-inline-start: auto; inset-inline-end: .25rem; inset-block-end: .15rem; z-index: 0; display: block; width: max-content; max-width: calc(100% - .5rem); margin: 0; padding: .04rem .2rem; border: 1px solid var(--border-soft); border-radius: .15rem; background: var(--panel-alt) !important; color: var(--fg-dim, #8993a8) !important; font-size: .6rem; line-height: 1; white-space: nowrap; pointer-events: none; opacity: .9; contain: layout paint; }
     .fa-summary-time.fa-summary-time-stale { background: var(--fg) !important; border-color: var(--fg); color: var(--bg, #0a0d13) !important; opacity: 1; }
