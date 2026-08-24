@@ -13,6 +13,7 @@
 
   const TYPES_STORAGE_KEY = 'fa.target-system-types';
   const MAP_CHANGED_EVENT = 'fa-target-system-markers-changed';
+  const MARKS_CACHE_KEY = 'fa.target-system-marks-cache-v2';
   // This is a shared contract for companion userscripts. The notifications
   // store contains the complete raw notification object from /notifications
   // (unwrapped from the combined feed on v0.3.3+).
@@ -27,6 +28,8 @@
 
   const NOTIFICATION_TYPES = [
     { key: 'exploration', label: 'Exploration' },
+    { key: 'expedition', label: 'Expedition' },
+    { key: 'occupied', label: 'Occupied' },
     { key: 'attack', label: 'Attack' },
     { key: 'transport', label: 'Transport' },
     { key: 'harvest', label: 'Harvest' },
@@ -40,14 +43,20 @@
   // notification consumer so either script works when installed alone.
   (function startNotificationCacheService() {
     const SERVICE_KEY = '__faNotificationCacheService';
-    if (window[SERVICE_KEY]) return;
+    const SERVICE_VERSION = 2;
+    if (window[SERVICE_KEY]) {
+      if (window[SERVICE_KEY].version !== SERVICE_VERSION) {
+        window.alert(`Fonte Antiga notification scripts are incompatible. Update all notification scripts to version ${SERVICE_VERSION}.`);
+      }
+      return;
+    }
     const DB_NAME = 'fa.notifications';
     const DB_VERSION = 1;
     const STORE = 'notifications';
     const META = 'metadata';
     const META_KEY = 'sync';
     const PAGE_SIZE = 10;
-    const PAGE_DELAY = 1000;
+    const PAGE_DELAY = 2000;
     const UPDATE_EVENT = 'fa-notifications-updated';
     const SYNC_STATE_EVENT = 'fa-notifications-sync-state';
     const CHANNEL = 'fa.notifications';
@@ -194,25 +203,27 @@
       if (!body || !Array.isArray(body.items)) throw new Error('Notification response has an unknown shape.');
       return { notifications: items(body), itemCount: body.items.length, total: Number(body.total) || body.items.length };
     }
-    async function sync() {
+    async function sync(force = false) {
       if (syncPromise) return syncPromise;
       const runSync = async () => {
-        setSyncState('syncing', { offset: 0, total: 0, error: '' });
         const db = await openDb();
         const previous = await meta(db);
         const keys = new Set((await result(db.transaction(STORE, 'readonly').objectStore(STORE).getAllKeys())).map(String));
+        let downloaded = 0;
+        setSyncState('syncing', { offset: 0, total: force ? keys.size : 0, cached: force ? 0 : keys.size, force, error: '' });
         // A completed sync can stop at the first cached item. An interrupted
         // sync must first reach the last notification committed by its prior
         // run; cached items before that checkpoint do not prove that there is
         // no gap after it.
-        const full = !previous || previous.status !== 'complete';
-        const resumeId = full && previous && previous.status === 'syncing' && previous.lastDownloadedId != null
+        const full = force || !previous || previous.status !== 'complete';
+        const resumeId = !force && full && previous && previous.status === 'syncing' && previous.lastDownloadedId != null
           ? String(previous.lastDownloadedId) : null;
         let checkpointReached = !resumeId;
         let offset = 0;
         let current = await page(0);
-        setSyncState('syncing', { offset: 0, total: current.total, cached: keys.size });
-        await saveMeta(db, { status: 'syncing', total: current.total, nextOffset: 0 });
+        const syncTotal = force ? Math.max(keys.size, current.total) : current.total;
+        setSyncState('syncing', { offset: 0, total: syncTotal, cached: force ? 0 : keys.size });
+        await saveMeta(db, { status: 'syncing', total: syncTotal, nextOffset: 0 });
         while (current.itemCount > 0) {
           const notifications = current.notifications;
           const checkpointIndex = !checkpointReached && resumeId
@@ -223,7 +234,7 @@
           // Once the checkpoint has been reached, or for a completed sync, the
           // first cached record is the safe boundary for this page.
           let boundaryIndex = -1;
-          if (!full || (resumeId && checkpointReached)) {
+          if (!force && (!full || (resumeId && checkpointReached))) {
             const searchFrom = checkpointIndex >= 0 ? checkpointIndex + 1 : 0;
             boundaryIndex = notifications.findIndex((notification, index) =>
               index >= searchFrom && keys.has(String(notification.id)));
@@ -239,18 +250,31 @@
           const lastDownloaded = pageNotifications[pageNotifications.length - 1];
           const checkpoint = checkpointReached && lastDownloaded
             ? { lastDownloadedId: String(lastDownloaded.id) } : {};
-          await upsert(fresh, { status: 'syncing', total: current.total, nextOffset: offset, ...checkpoint });
+          // Force mode deliberately writes every notification returned by every
+          // page, including records already present in IndexedDB. It never
+          // uses the cached-record boundary used by the normal sync.
+          await upsert(force ? notifications : fresh, { status: 'syncing', total: syncTotal, nextOffset: offset, ...checkpoint });
           offset += current.itemCount;
+          if (force) downloaded += notifications.length;
+          const overallDownloaded = await result(db.transaction(STORE, 'readonly').objectStore(STORE).count());
           await saveMeta(db, {
-            status: 'syncing', total: current.total, cached: keys.size, nextOffset: offset, ...checkpoint,
+            status: 'syncing', total: syncTotal, cached: overallDownloaded, nextOffset: offset, ...checkpoint,
           });
-          setSyncState('syncing', { offset, total: current.total, cached: keys.size });
-          if (boundaryIndex >= 0 || offset >= current.total) break;
+          setSyncState('syncing', {
+            offset,
+            total: syncTotal,
+            cached: force ? downloaded : overallDownloaded,
+          });
+          // Force mode cannot rely on a possibly stale/missing total. Keep
+          // paging while the API returns full pages and stop only on a short
+          // page (the final page). Normal sync retains its total/boundary stop.
+          if (boundaryIndex >= 0 || (!force && offset >= current.total) || (force && current.itemCount < PAGE_SIZE)) break;
           await new Promise(resolve => setTimeout(resolve, PAGE_DELAY));
           current = await page(offset);
         }
-        await saveMeta(db, { status: 'complete', total: current.total, cached: keys.size, nextOffset: offset, updatedAt: new Date().toISOString() });
-        setSyncState('complete', { offset, total: current.total, cached: keys.size, error: '' });
+        const overallDownloaded = await result(db.transaction(STORE, 'readonly').objectStore(STORE).count());
+        await saveMeta(db, { status: 'complete', total: syncTotal, cached: overallDownloaded, nextOffset: offset, updatedAt: new Date().toISOString() });
+        setSyncState('complete', { offset, total: syncTotal, cached: overallDownloaded, force: false, error: '' });
         announce();
         return true;
       };
@@ -276,7 +300,16 @@
         });
       return syncPromise;
     }
-    function scheduleSync(delay = 1500) {
+    async function forceSync() {
+      if (syncTimer) {
+        clearTimeout(syncTimer);
+        syncTimer = null;
+      }
+      syncPending = false;
+      if (syncPromise) await syncPromise;
+      return sync(true);
+    }
+    function scheduleSync(delay = 2000) {
       if (syncPromise) {
         syncPending = true;
         return;
@@ -288,7 +321,7 @@
         sync().finally(() => {
           if (syncPending) {
             syncPending = false;
-            scheduleSync(500);
+            scheduleSync(2000);
           }
         });
       }, delay);
@@ -301,7 +334,7 @@
       const old = lastUnread == null ? Number(saved && saved.unreadCount) : lastUnread;
       lastUnread = unread;
       await saveMeta(db, { unreadCount: unread });
-      if (Number.isFinite(old) && unread > old) scheduleSync(500);
+      if (Number.isFinite(old) && unread > old) scheduleSync(2000);
     }
     function inspect(url, response) {
       if (!response || !response.ok) return;
@@ -340,8 +373,8 @@
     }
     // Start a delayed, serialized backfill so the game's initial rendering and
     // requests get priority. Later unread increases schedule a short sync.
-    window[SERVICE_KEY] = { sync, getSyncState: () => ({ ...syncState }) };
-    scheduleSync(1500);
+    window[SERVICE_KEY] = { version: SERVICE_VERSION, sync, forceSync, getSyncState: () => ({ ...syncState }) };
+    scheduleSync(2000);
   })();
 
   const style = document.createElement('style');
@@ -568,12 +601,14 @@
         const DB_NAME = 'fa.notifications';
         const DB_VERSION = 1;
         const STORE_NAME = 'notifications';
-        const TYPES = new Set(${JSON.stringify(['exploration', 'attack', 'transport', 'harvest', 'trade', 'other'])});
+        const TYPES = new Set(${JSON.stringify(['exploration', 'expedition', 'occupied', 'attack', 'transport', 'harvest', 'trade', 'other'])});
         const EVENT_NAME = 'fa-target-system-markers-changed';
         const RADII = { small: 2.6, mid: 3.4, large: 4.4 };
         let targetMarks = [];
+        let marksByType = new Map();
         let marksLoaded = false;
         let marksLoadPromise = null;
+        let redrawFrame = null;
         let systemsScreenWasVisible = false;
         let mapWasVisible = false;
 
@@ -586,12 +621,43 @@
         function notificationType(notification) {
           const notificationType = String(notification && notification.notification_type || '').toLowerCase();
           const missionType = String(notification && notification.mission_type || '').toLowerCase();
-          if (notificationType.includes('explor') || missionType === 'explore') return 'exploration';
+          if (notificationType === 'expedition_lost') return null;
+          if (notificationType === 'expedition_returned' || (missionType === 'expedition' && notificationType !== 'expedition_lost')) return 'expedition';
+          if (notificationType === 'exploration' || missionType === 'explore') return 'exploration';
           if (notificationType.includes('attack') || notificationType.includes('battle') || notificationType === 'planet_scanned' || missionType === 'attack') return 'attack';
           if (notificationType.includes('harvest') || missionType === 'harvest') return 'harvest';
           if (notificationType.includes('trade') || missionType === 'trade') return 'trade';
           if (notificationType.includes('transport') || missionType === 'transport') return 'transport';
           return 'other';
+        }
+        async function readNotificationSignature() {
+          if (!window.indexedDB) return null;
+          return new Promise((resolve, reject) => {
+            const request = indexedDB.open(DB_NAME, DB_VERSION);
+            request.onupgradeneeded = event => {
+              const db = event.target.result;
+              if (!db.objectStoreNames.contains(STORE_NAME)) event.target.transaction.abort();
+            };
+            request.onsuccess = () => {
+              const db = request.result;
+              if (!db.objectStoreNames.contains(STORE_NAME)) { db.close(); resolve(null); return; }
+              const store = db.transaction(STORE_NAME, 'readonly').objectStore(STORE_NAME);
+              const countRequest = store.count();
+              const newestRequest = store.indexNames.contains('created_at')
+                ? store.index('created_at').openCursor(null, 'prev') : null;
+              let count;
+              let newest;
+              let countReady = false, newestReady = !newestRequest;
+              countRequest.onsuccess = () => { count = countRequest.result; countReady = true; maybeResolve(); };
+              if (newestRequest) {
+                newestRequest.onsuccess = () => { newest = newestRequest.result?.value; newestReady = true; maybeResolve(); };
+                newestRequest.onerror = () => finish(newestRequest.error);
+              }
+              function maybeResolve() { if (countReady && newestReady) finish(); }
+              function finish(error) { db.close(); if (error) reject(error); else resolve(String(count) + ':' + String(newest?.id ?? '') + ':' + String(newest?.created_at ?? '')); }
+            };
+            request.onerror = () => reject(request.error || new Error('Could not open notification cache.'));
+          });
         }
         async function readNotificationMarks() {
           if (!window.indexedDB) return [];
@@ -620,25 +686,51 @@
             const system = Number(notification && notification.destination_system);
             if (!Number.isSafeInteger(system) || system < 1) continue;
             const type = notificationType(notification);
-            const key = system + ':' + type;
-            if (seen.has(key)) continue;
-            seen.add(key);
-            marks.push({ system, type });
+            if (!type) continue;
+            const types = [type];
+            const occupied = notification && (
+              notification.exploration?.is_occupied === true
+              || notification.notification_type === 'exploration_lost'
+              || notification.notification_type === 'planet_scanned'
+              || notification.notification_type === 'attack_incoming'
+              || notification.notification_type === 'battle_report'
+            );
+            if (occupied) types.push('occupied');
+            for (const markType of types) {
+              const key = system + ':' + markType;
+              if (seen.has(key)) continue;
+              seen.add(key);
+              marks.push({ system, type: markType });
+            }
           }
           return marks;
         }
         async function loadMarksForVisibleMap() {
           if (marksLoadPromise) return marksLoadPromise;
-          marksLoadPromise = readNotificationMarks().then(marks => {
-            targetMarks = marks;
+          marksLoadPromise = (async () => {
+            const signature = await readNotificationSignature();
+            let cached = null;
+            try { cached = JSON.parse(localStorage.getItem('${MARKS_CACHE_KEY}') || 'null'); } catch (_) {}
+            const marks = cached && cached.signature === signature
+              ? cached.marks
+              : await readNotificationMarks();
+            if (!cached || cached.signature !== signature) {
+              try { localStorage.setItem('${MARKS_CACHE_KEY}', JSON.stringify({ signature, marks })); } catch (_) {}
+            }
+            targetMarks = Array.isArray(marks) ? marks : [];
+            marksByType = new Map();
+            for (const mark of targetMarks) {
+              if (!marksByType.has(mark.type)) marksByType.set(mark.type, new Set());
+              marksByType.get(mark.type).add(Number(mark.system));
+            }
             marksLoaded = true;
-            marksLoadPromise = null;
-            redraw();
-            return marks;
-          }).catch(error => {
-            marksLoadPromise = null;
+            scheduleRedraw();
+            return targetMarks;
+          })().catch(() => {
+            marksLoaded = true;
+            targetMarks = [];
             return [];
-          });
+          }).finally(() => { marksLoadPromise = null; });
           return marksLoadPromise;
         }
         function readSelectedTypes() {
@@ -699,7 +791,12 @@
           ctx.clearRect(0, 0, overlay.width, overlay.height);
           if (!marksLoaded) return;
           const selected = readSelectedTypes();
-          const markedSystems = new Set(targetMarks.filter(mark => selected.has(mark.type)).map(mark => Number(mark.system)));
+          const markedSystems = new Set();
+          for (const type of selected) {
+            const systems = marksByType.get(type);
+            if (!systems) continue;
+            systems.forEach(system => markedSystems.add(system));
+          }
           if (markedSystems.size === 0) return;
           const color = getComputedStyle(document.documentElement).getPropertyValue('--fa-target-system-color').trim() || '#b7ff00';
           ctx.save();
@@ -719,6 +816,13 @@
           // full-width companion). Repaint only our overlay to avoid a second
           // expensive canvas render for every filter/resize event.
           drawTargetSystems();
+        }
+        function scheduleRedraw() {
+          if (redrawFrame !== null) return;
+          redrawFrame = requestAnimationFrame(() => {
+            redrawFrame = null;
+            redraw();
+          });
         }
         function install() {
           const original = window.drawGalaxyMap;
@@ -740,9 +844,25 @@
           if (install()) return;
           window.setTimeout(tryInstall, 250);
         }
-        window.addEventListener(EVENT_NAME, redraw);
+        window.addEventListener(EVENT_NAME, scheduleRedraw);
+        window.addEventListener('fa-notifications-updated', () => {
+          marksLoaded = false;
+          if (mapIsVisible()) loadMarksForVisibleMap();
+        });
+        if (typeof BroadcastChannel !== 'undefined') {
+          try {
+            const channel = new BroadcastChannel('fa.notifications');
+            channel.addEventListener('message', event => {
+              if (event.data?.type === 'fa-notifications-updated') {
+                marksLoaded = false;
+                if (mapIsVisible()) loadMarksForVisibleMap();
+              }
+            });
+          } catch (_) {}
+        }
         const visibilityObserver = new MutationObserver(observeMapVisibility);
-        visibilityObserver.observe(document.documentElement, { childList: true, subtree: true, attributes: true, attributeFilter: ['class'] });
+        const visibilityRoot = document.getElementById('screen-systems') || document.documentElement;
+        visibilityObserver.observe(visibilityRoot, { childList: true, subtree: true, attributes: true, attributeFilter: ['class'] });
         tryInstall();
       })();
     `;

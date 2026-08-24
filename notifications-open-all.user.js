@@ -14,6 +14,11 @@
   const style = document.createElement('style');
   style.textContent = `
     .fa-expand-unread-btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 1.9rem;
+      margin: 0;
       white-space: nowrap;
     }
   `;
@@ -137,13 +142,11 @@
       button.addEventListener('click', openAllNotifications);
     }
 
+    const readAllButton = document.getElementById('notif-read-all-btn');
     const clearButton = document.getElementById('notif-clear-btn');
-    if (
-      clearButton &&
-      clearButton.parentElement === bar.parentElement &&
-      clearButton.previousElementSibling !== button
-    ) {
-      clearButton.insertAdjacentElement('beforebegin', button);
+    const anchor = readAllButton && readAllButton.parentElement === bar.parentElement ? readAllButton : clearButton;
+    if (anchor && anchor.parentElement === bar.parentElement && anchor.previousElementSibling !== button) {
+      anchor.insertAdjacentElement('beforebegin', button);
     }
 
     const cards = document.querySelectorAll('#notifications-container .notif-card');

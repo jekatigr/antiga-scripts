@@ -85,6 +85,7 @@
     featureFilters: new Set(),
     openFilterColumn: null,
     filterOutsideListenerInstalled: false,
+    notificationSyncOutsideListenerInstalled: false,
     refreshing: new Set(),
     refreshingAll: false,
     refreshProgress: { completed: 0, total: 0, endpointCompleted: 0, endpointTotal: REFRESH_ENDPOINTS.length, current: '' },
@@ -104,14 +105,20 @@
   // notification consumer so either script works when installed alone.
   (function startNotificationCacheService() {
     const SERVICE_KEY = '__faNotificationCacheService';
-    if (window[SERVICE_KEY]) return;
+    const SERVICE_VERSION = 2;
+    if (window[SERVICE_KEY]) {
+      if (window[SERVICE_KEY].version !== SERVICE_VERSION) {
+        window.alert(`Fonte Antiga notification scripts are incompatible. Update all notification scripts to version ${SERVICE_VERSION}.`);
+      }
+      return;
+    }
     const DB_NAME = 'fa.notifications';
     const DB_VERSION = 1;
     const STORE = 'notifications';
     const META = 'metadata';
     const META_KEY = 'sync';
     const PAGE_SIZE = 10;
-    const PAGE_DELAY = 1000;
+    const PAGE_DELAY = 2000;
     const UPDATE_EVENT = 'fa-notifications-updated';
     const SYNC_STATE_EVENT = 'fa-notifications-sync-state';
     const CHANNEL = 'fa.notifications';
@@ -258,25 +265,27 @@
       if (!body || !Array.isArray(body.items)) throw new Error('Notification response has an unknown shape.');
       return { notifications: items(body), itemCount: body.items.length, total: Number(body.total) || body.items.length };
     }
-    async function sync() {
+    async function sync(force = false) {
       if (syncPromise) return syncPromise;
       const runSync = async () => {
-        setSyncState('syncing', { offset: 0, total: 0, error: '' });
         const db = await openDb();
         const previous = await meta(db);
         const keys = new Set((await result(db.transaction(STORE, 'readonly').objectStore(STORE).getAllKeys())).map(String));
+        let downloaded = 0;
+        setSyncState('syncing', { offset: 0, total: force ? keys.size : 0, cached: force ? 0 : keys.size, force, error: '' });
         // A completed sync can stop at the first cached item. An interrupted
         // sync must first reach the last notification committed by its prior
         // run; cached items before that checkpoint do not prove that there is
         // no gap after it.
-        const full = !previous || previous.status !== 'complete';
-        const resumeId = full && previous && previous.status === 'syncing' && previous.lastDownloadedId != null
+        const full = force || !previous || previous.status !== 'complete';
+        const resumeId = !force && full && previous && previous.status === 'syncing' && previous.lastDownloadedId != null
           ? String(previous.lastDownloadedId) : null;
         let checkpointReached = !resumeId;
         let offset = 0;
         let current = await page(0);
-        setSyncState('syncing', { offset: 0, total: current.total, cached: keys.size });
-        await saveMeta(db, { status: 'syncing', total: current.total, nextOffset: 0 });
+        const syncTotal = force ? Math.max(keys.size, current.total) : current.total;
+        setSyncState('syncing', { offset: 0, total: syncTotal, cached: force ? 0 : keys.size });
+        await saveMeta(db, { status: 'syncing', total: syncTotal, nextOffset: 0 });
         while (current.itemCount > 0) {
           const notifications = current.notifications;
           const checkpointIndex = !checkpointReached && resumeId
@@ -287,7 +296,7 @@
           // Once the checkpoint has been reached, or for a completed sync, the
           // first cached record is the safe boundary for this page.
           let boundaryIndex = -1;
-          if (!full || (resumeId && checkpointReached)) {
+          if (!force && (!full || (resumeId && checkpointReached))) {
             const searchFrom = checkpointIndex >= 0 ? checkpointIndex + 1 : 0;
             boundaryIndex = notifications.findIndex((notification, index) =>
               index >= searchFrom && keys.has(String(notification.id)));
@@ -303,18 +312,31 @@
           const lastDownloaded = pageNotifications[pageNotifications.length - 1];
           const checkpoint = checkpointReached && lastDownloaded
             ? { lastDownloadedId: String(lastDownloaded.id) } : {};
-          await upsert(fresh, { status: 'syncing', total: current.total, nextOffset: offset, ...checkpoint });
+          // Force mode deliberately writes every notification returned by every
+          // page, including records already present in IndexedDB. It never
+          // uses the cached-record boundary used by the normal sync.
+          await upsert(force ? notifications : fresh, { status: 'syncing', total: syncTotal, nextOffset: offset, ...checkpoint });
           offset += current.itemCount;
+          if (force) downloaded += notifications.length;
+          const overallDownloaded = await result(db.transaction(STORE, 'readonly').objectStore(STORE).count());
           await saveMeta(db, {
-            status: 'syncing', total: current.total, cached: keys.size, nextOffset: offset, ...checkpoint,
+            status: 'syncing', total: syncTotal, cached: overallDownloaded, nextOffset: offset, ...checkpoint,
           });
-          setSyncState('syncing', { offset, total: current.total, cached: keys.size });
-          if (boundaryIndex >= 0 || offset >= current.total) break;
+          setSyncState('syncing', {
+            offset,
+            total: syncTotal,
+            cached: force ? downloaded : overallDownloaded,
+          });
+          // Force mode cannot rely on a possibly stale/missing total. Keep
+          // paging while the API returns full pages and stop only on a short
+          // page (the final page). Normal sync retains its total/boundary stop.
+          if (boundaryIndex >= 0 || (!force && offset >= current.total) || (force && current.itemCount < PAGE_SIZE)) break;
           await new Promise(resolve => setTimeout(resolve, PAGE_DELAY));
           current = await page(offset);
         }
-        await saveMeta(db, { status: 'complete', total: current.total, cached: keys.size, nextOffset: offset, updatedAt: new Date().toISOString() });
-        setSyncState('complete', { offset, total: current.total, cached: keys.size, error: '' });
+        const overallDownloaded = await result(db.transaction(STORE, 'readonly').objectStore(STORE).count());
+        await saveMeta(db, { status: 'complete', total: syncTotal, cached: overallDownloaded, nextOffset: offset, updatedAt: new Date().toISOString() });
+        setSyncState('complete', { offset, total: syncTotal, cached: overallDownloaded, force: false, error: '' });
         announce();
         return true;
       };
@@ -340,7 +362,16 @@
         });
       return syncPromise;
     }
-    function scheduleSync(delay = 1500) {
+    async function forceSync() {
+      if (syncTimer) {
+        clearTimeout(syncTimer);
+        syncTimer = null;
+      }
+      syncPending = false;
+      if (syncPromise) await syncPromise;
+      return sync(true);
+    }
+    function scheduleSync(delay = 2000) {
       if (syncPromise) {
         syncPending = true;
         return;
@@ -352,7 +383,7 @@
         sync().finally(() => {
           if (syncPending) {
             syncPending = false;
-            scheduleSync(500);
+            scheduleSync(2000);
           }
         });
       }, delay);
@@ -365,7 +396,7 @@
       const old = lastUnread == null ? Number(saved && saved.unreadCount) : lastUnread;
       lastUnread = unread;
       await saveMeta(db, { unreadCount: unread });
-      if (Number.isFinite(old) && unread > old) scheduleSync(500);
+      if (Number.isFinite(old) && unread > old) scheduleSync(2000);
     }
     function inspect(url, response) {
       if (!response || !response.ok) return;
@@ -404,8 +435,8 @@
     }
     // Start a delayed, serialized backfill so the game's initial rendering and
     // requests get priority. Later unread increases schedule a short sync.
-    window[SERVICE_KEY] = { sync, getSyncState: () => ({ ...syncState }) };
-    scheduleSync(1500);
+    window[SERVICE_KEY] = { version: SERVICE_VERSION, sync, forceSync, getSyncState: () => ({ ...syncState }) };
+    scheduleSync(2000);
   })();
 
   const style = document.createElement('style');
@@ -465,9 +496,19 @@
     .fa-summary-page-label { min-width: 6rem; text-align: center; color: var(--muted); font-size: .78rem; }
     .fa-summary-status { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; flex: 1 1 100%; min-height: 1.1em; font-size: .78rem; white-space: pre-line; }
     .fa-summary-status-text { min-width: 0; }
-    .fa-summary-status .fa-summary-update-all { flex: 0 0 auto; margin-left: .5rem; }
+    .fa-summary-status .fa-summary-update-all { flex: 0 0 auto; margin-left: auto; }
     .fa-summary-status .fa-summary-progress { flex: 0 1 18rem; width: 18rem; min-width: 12rem; max-width: 100%; margin-left: 0; }
-    .fa-summary-sync-state { margin-left: auto; padding: .18rem .45rem; border: 1px solid currentColor; border-radius: .2rem; white-space: nowrap; font-size: .7rem; line-height: 1.1; }
+    .fa-summary-notification-sync-controls { display: flex; align-items: center; gap: .5rem; margin-left: auto; }
+    .fa-summary-notification-progress { width: 8rem; height: .7rem; accent-color: var(--accent); }
+    .fa-summary-notification-progress[hidden] { display: none !important; }
+    .fa-summary-sync-state { margin-left: 0; position: relative; z-index: 20; margin-left: auto; padding: .18rem .45rem; border: 1px solid currentColor; border-radius: .2rem; white-space: nowrap; font-size: .7rem; line-height: 1.1; }
+    .fa-summary-sync-state summary { display: flex; align-items: center; justify-content: flex-end; cursor: pointer; color: var(--muted); list-style: none; }
+    .fa-summary-sync-state summary::-webkit-details-marker { display: none; }
+    .fa-summary-sync-state summary::marker { display: none; }
+    .fa-summary-sync-state summary::after { content: '▾'; margin-left: .35rem; color: currentColor; }
+    .fa-summary-force { position: absolute; top: calc(100% + .18rem); right: 0; display: block; width: 100%; min-height: 2.2rem; margin: 0; padding: .55rem .45rem; box-sizing: border-box; border: 1px solid currentColor; border-radius: .2rem; background: var(--panel, #10151d); color: #ff5f5f; font: inherit; cursor: pointer; text-align: right; box-shadow: 0 .25rem .6rem rgba(0,0,0,.35); }
+    .fa-summary-force:hover, .fa-summary-force:focus-visible { color: #ff9a9a; text-decoration: underline; }
+    .fa-summary-force:disabled { cursor: wait; opacity: .65; }
     .fa-summary-sync-idle { color: var(--muted); }
     .fa-summary-sync-scheduled { color: #ffcc66; }
     .fa-summary-sync-syncing { color: var(--accent); }
@@ -544,6 +585,7 @@
     .fa-summary-actions-inner { display: flex; align-items: center; gap: .25rem; width: 100%; }
     .fa-summary-actions-inner button { display: inline-flex; flex: 1 1 0; align-items: center; justify-content: center; min-width: 0; height: 1.8rem; margin: 0; padding: 0; appearance: none; line-height: 1; }
     .fa-summary-action-glyph { display: block; font-size: 1rem; line-height: 1; pointer-events: none; }
+    .fa-summary-action-glyph svg { display: block; width: 1.1rem; height: 1.1rem; fill: currentColor; }
     .fa-summary-icon-line { display: flex; align-items: center; min-width: 0; min-height: 1.25em; }
     .fa-summary-survivors { display: inline-flex; align-items: center; gap: .2rem; white-space: nowrap; }
     .fa-summary-survivors-separator { color: var(--fg-dim, #8993a8); opacity: .45; }
@@ -725,12 +767,54 @@
     });
     return td;
   }
+  const GALAXY_ACTION_ICON = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path fill="currentColor" d="M11 13a1 1 0 1 1 0 2a1 1 0 0 1 0-2M8 2c1.407 0 2.698.7 3.61 1.84C12.515 4.974 13 6.472 13 8a1 1 0 1 1 2 0c0 .671-.267 1.28-.687 1.786c-.413.5-.98.908-1.623 1.23a9 9 0 0 1-2.191.735C9.7 11.916 8.852 12 8 12a1 1 0 1 1 0 2c-1.407 0-2.698-.7-3.61-1.84C3.485 11.027 3 9.528 3 8l-.005.103A1 1 0 0 1 1 8c0-.671.267-1.28.687-1.786c.413-.5.98-.908 1.624-1.23A9 9 0 0 1 5.5 4.25A12.4 12.4 0 0 1 8 4l-.103-.005A1 1 0 0 1 8 2m0 4c-.91 0-1.694.278-2.229.679C5.237 7.079 5 7.557 5 8s.237.92.771 1.321C6.306 9.722 7.091 10 8 10c.91 0 1.694-.278 2.229-.679C10.763 8.92 11 8.443 11 8s-.237-.92-.771-1.321C9.694 6.278 8.909 6 8 6M5 1a1 1 0 1 1 0 2a1 1 0 0 1 0-2"/></svg>';
   function actionButton(glyph, title, onClick) {
     const button = document.createElement('button');
     button.type = 'button'; button.title = title; button.setAttribute('aria-label', title);
-    const icon = document.createElement('span'); icon.className = 'fa-summary-action-glyph'; icon.setAttribute('aria-hidden', 'true'); icon.textContent = glyph;
+    const icon = document.createElement('span'); icon.className = 'fa-summary-action-glyph'; icon.setAttribute('aria-hidden', 'true'); icon.innerHTML = glyph && glyph.startsWith('<svg') ? glyph : ''; if (!icon.innerHTML) icon.textContent = glyph;
     button.appendChild(icon); button.addEventListener('click', onClick);
     return button;
+  }
+  let galaxyNavigationBridgeInstalled = false;
+  function installGalaxyNavigationBridge() {
+    if (galaxyNavigationBridgeInstalled) return;
+    galaxyNavigationBridgeInstalled = true;
+    const script = document.createElement('script');
+    script.textContent = `
+      (function () {
+        'use strict';
+        window.addEventListener('message', event => {
+          if (!event.data || event.data.source !== 'fa.universe-overview.galaxy') return;
+          const galaxy = Number(event.data.galaxy), system = Number(event.data.system);
+          if (!Number.isInteger(galaxy) || galaxy < 1 || !Number.isInteger(system) || system < 1) return;
+          (async () => {
+            // goHome() initializes the systems screen and populates its frames;
+            // merely toggling screen-systems leaves a blank, uninitialized view.
+            if (typeof goHome === 'function') await goHome();
+            else if (typeof showScreen === 'function') showScreen('systems');
+            else return;
+            if (typeof setPageTitle === 'function') setPageTitle('Galaxy');
+            if (typeof refreshTopbarPlanets === 'function') refreshTopbarPlanets();
+            const input = document.getElementById('galaxy-nav-system');
+            if (input) input.value = String(system);
+            if (typeof state === 'undefined' || typeof jumpToSystem !== 'function') {
+              if (typeof jumpToGalaxyMapSystem === 'function') jumpToGalaxyMapSystem(system);
+              return;
+            }
+            const previousHome = state.homeSystem;
+            state.homeSystem = { ...(previousHome || {}), galaxy, system };
+            try { await jumpToSystem(); } finally { state.homeSystem = previousHome; }
+          })().catch(() => {});
+        });
+      })();
+    `;
+    (document.head || document.documentElement).appendChild(script);
+    script.remove();
+  }
+  function openGalaxyForRecord(record) {
+    const galaxy = Number(record.galaxy), system = Number(record.system);
+    if (!Number.isInteger(galaxy) || galaxy < 1 || !Number.isInteger(system) || system < 1) return;
+    window.postMessage({ source: 'fa.universe-overview.galaxy', galaxy, system }, '*');
   }
   function queueTimestampTitle(record) {
     const labels = [['buildQueue', 'construction'], ['researchQueue', 'research'], ['shipQueue', 'ship'], ['defenseQueue', 'defense']];
@@ -1651,14 +1735,19 @@
         inventoryCatalog().forEach(item => { cells[inventoryColumnKey(item.key)] = inventoryCell(record, spec, item); });
       }
     }
-    if (state.view === 'owned' && record.planetId != null) {
+    if ((state.view === 'owned' && record.planetId != null) || (state.view === 'explored' && validGalaxy(record.galaxy) && record.system != null)) {
       const actionInner = document.createElement('div'); actionInner.className = 'fa-summary-actions-inner';
-      const updating = state.refreshing.has(record.planetId);
-      const blocked = updating || state.refreshingAll;
-      const update = actionButton('↻', blocked ? (state.refreshingAll ? 'Updating all planet data…' : 'Updating planet data…') : 'Update planet data', event => { event.stopPropagation(); manualRefresh(record); });
-      update.disabled = blocked; actionInner.appendChild(update);
-      const move = actionButton('↗', 'Open planet', event => { event.stopPropagation(); closePanel(); if (typeof window.openPlanet === 'function') window.openPlanet(record.planetId); });
-      actionInner.appendChild(move);
+      if (state.view === 'owned') {
+        const updating = state.refreshing.has(record.planetId);
+        const blocked = updating || state.refreshingAll;
+        const update = actionButton('↻', blocked ? (state.refreshingAll ? 'Updating all planet data…' : 'Updating planet data…') : 'Update planet data', event => { event.stopPropagation(); manualRefresh(record); });
+        update.disabled = blocked; actionInner.appendChild(update);
+        const move = actionButton('↗', 'Open planet', event => { event.stopPropagation(); closePanel(); if (typeof window.openPlanet === 'function') window.openPlanet(record.planetId); });
+        actionInner.appendChild(move);
+      } else {
+        const galaxy = actionButton(GALAXY_ACTION_ICON, 'Open galaxy system', event => { event.stopPropagation(); closePanel(); openGalaxyForRecord(record); });
+        actionInner.appendChild(galaxy);
+      }
       const nameContent = document.createElement('div'); nameContent.className = 'fa-summary-name-content';
       const nameMain = cells.name.querySelector('.fa-summary-name');
       if (nameMain) nameMain.remove();
@@ -1792,12 +1881,26 @@
     const status = ['scheduled', 'syncing', 'complete', 'error'].includes(sync.state) ? sync.state : 'idle';
     if (status === 'scheduled') return { status, text: 'Notifications: scheduled', title: 'Notification synchronization is queued.' };
     if (status === 'syncing') {
-      const progress = sync.total > 0 ? ` ${Math.min(sync.offset || 0, sync.total)}/${sync.total}` : '…';
-      return { status, text: `Notifications: syncing${progress}`, title: 'Notification history is being synchronized in the background.' };
+      const downloaded = Number(sync.cached) || 0;
+      const progress = sync.total > 0 ? ` ${downloaded}/${sync.total}` : ' …';
+      return { status, text: `Notifications: syncing${progress}`, title: sync.force ? 'A full notification resynchronization is in progress.' : 'Notification history is being synchronized in the background.' };
     }
     if (status === 'complete') return { status, text: `Notifications: synced${sync.cached != null ? ` · ${sync.cached} cached` : ''}`, title: 'Notification cache is synchronized.' };
     if (status === 'error') return { status, text: 'Notifications: sync error', title: sync.error || 'Notification synchronization failed.' };
     return { status, text: 'Notifications: idle', title: 'Notification synchronization is idle.' };
+  }
+
+  async function forceSyncNotifications() {
+    const service = window.__faNotificationCacheService;
+    if (!service) throw new Error('Notification cache service is unavailable.');
+    state.notificationSync = { ...(state.notificationSync || {}), state: 'syncing', force: true, error: '' };
+    renderTable();
+    if (service.forceSync) return service.forceSync();
+    // Compatibility with an older companion script that initialized the
+    // singleton before this script loaded. New services accept the force
+    // argument; older ones will at least perform a complete pending sync.
+    if (service.sync) return service.sync(true);
+    throw new Error('Notification cache service cannot synchronize.');
   }
 
   function renderTable() {
@@ -1832,14 +1935,48 @@
       const statusText = `${allRecords.length} ${state.view === 'owned' ? 'owned' : 'explored'} planet${allRecords.length === 1 ? '' : 's'}${rangeText}${state.lastError ? `\n${state.lastError}` : ''}`;
       status.replaceChildren();
       const statusLabel = document.createElement('span'); statusLabel.className = 'fa-summary-status-text'; statusLabel.textContent = statusText; status.appendChild(statusLabel);
-      if (updateAll) status.appendChild(updateAll);
-      if (progressWrap) status.appendChild(progressWrap);
-      const syncDisplay = notificationSyncDisplay();
-      const syncBadge = document.createElement('span');
-      syncBadge.className = `fa-summary-sync-state fa-summary-sync-${syncDisplay.status}`;
-      syncBadge.textContent = syncDisplay.text;
-      syncBadge.title = syncDisplay.title;
-      status.appendChild(syncBadge);
+      if (state.view === 'owned') {
+        if (updateAll) status.appendChild(updateAll);
+        if (progressWrap) status.appendChild(progressWrap);
+      } else {
+        const syncDisplay = notificationSyncDisplay();
+        const notificationControls = document.createElement('div');
+        notificationControls.className = 'fa-summary-notification-sync-controls';
+        const notificationProgress = document.createElement('progress');
+        notificationProgress.className = 'fa-summary-notification-progress';
+        notificationProgress.max = 1;
+        const syncState = state.notificationSync || {};
+        const syncTotal = Number(syncState.total) || 0;
+        const syncDownloaded = Number(syncState.cached) || 0;
+        notificationProgress.value = syncTotal > 0 ? Math.min(1, syncDownloaded / syncTotal) : 0;
+        notificationProgress.hidden = syncDisplay.status !== 'syncing';
+        notificationProgress.title = syncTotal > 0 ? `${syncDownloaded}/${syncTotal} notifications downloaded` : 'Downloading notifications…';
+        const syncDropdown = document.createElement('details');
+        syncDropdown.className = `fa-summary-sync-state fa-summary-sync-${syncDisplay.status}`;
+        const syncLabel = document.createElement('summary');
+        syncLabel.textContent = syncDisplay.text;
+        syncLabel.title = syncDisplay.title;
+        const forceSync = document.createElement('button');
+        forceSync.type = 'button';
+        forceSync.className = 'fa-summary-force';
+        forceSync.textContent = 'Force re-sync';
+        forceSync.title = 'Download and upsert the complete notification history.';
+        forceSync.disabled = state.notificationSync?.force === true;
+        forceSync.addEventListener('click', event => {
+          event.preventDefault();
+          event.stopPropagation();
+          syncDropdown.open = false;
+          forceSync.disabled = true;
+          forceSyncNotifications().catch(error => {
+            state.notificationSync = { ...(state.notificationSync || {}), state: 'error', force: false, error: error?.message || 'Force re-sync failed.' };
+            forceSync.disabled = false;
+            renderTable();
+          });
+        });
+        syncDropdown.append(syncLabel, forceSync);
+        notificationControls.append(notificationProgress, syncDropdown);
+        status.appendChild(notificationControls);
+      }
     }
     if (updateAll) {
       const bulkInProgress = state.refreshingAll;
@@ -1924,6 +2061,16 @@
     });
 
   }
+  function installNotificationSyncOutsideListener() {
+    if (state.notificationSyncOutsideListenerInstalled) return;
+    state.notificationSyncOutsideListenerInstalled = true;
+    document.addEventListener('click', event => {
+      document.querySelectorAll('.fa-summary-sync-state[open]').forEach(dropdown => {
+        if (!dropdown.contains(event.target)) dropdown.open = false;
+      });
+    });
+  }
+
   function positionFilterMenu(menu, button) {
     const rect = button.getBoundingClientRect();
     const width = menu.offsetWidth || 160;
@@ -2098,6 +2245,7 @@
       const tbody = document.createElement('tbody'); tbody.className = 'fa-summary-body'; table.append(thead, tbody); wrap.appendChild(table); dialog.append(header, controls, wrap); overlay.appendChild(dialog); overlay.addEventListener('click', event => { if (event.target === overlay) closePanel(); }); document.body.appendChild(overlay); state.panel = overlay;
     }
     installFilterOutsideListener();
+    installNotificationSyncOutsideListener();
     const title = document.querySelector('#planet-sidebar .planet-sidebar-title');
     if (title && !title.querySelector('.fa-summary-sidebar-btn')) { const button = document.createElement('button'); button.type = 'button'; button.className = 'fa-summary-sidebar-btn'; button.textContent = 'Overview'; button.addEventListener('click', openPanel); title.appendChild(button); }
   }
@@ -2144,6 +2292,7 @@
   }
 
   function start() {
+    installGalaxyNavigationBridge();
     loadOwnData();
     loadNotifications();
     ensurePanel();
