@@ -66,6 +66,7 @@
     let syncPending = false;
     let lastUnread = null;
     let syncState = { state: 'idle', offset: 0, total: 0, cached: 0, error: '' };
+    let announceTimer = null;
     const channel = typeof BroadcastChannel === 'undefined' ? null : new BroadcastChannel(CHANNEL);
 
     function result(request) {
@@ -110,8 +111,15 @@
         .map(item => item.notification) : [];
     }
     function announce() {
-      window.dispatchEvent(new Event(UPDATE_EVENT));
-      try { channel?.postMessage({ type: UPDATE_EVENT }); } catch (_) {}
+      // Multiple interception layers can observe the same API response in
+      // the same turn. Coalesce those notifications so consumers rebuild
+      // their indexes at most once per task.
+      if (announceTimer) return;
+      announceTimer = setTimeout(() => {
+        announceTimer = null;
+        window.dispatchEvent(new Event(UPDATE_EVENT));
+        try { channel?.postMessage({ type: UPDATE_EVENT }); } catch (_) {}
+      }, 0);
     }
     function setSyncState(stateName, changes = {}) {
       syncState = { ...syncState, ...changes, state: stateName };
@@ -163,9 +171,11 @@
             XMLHttpRequest.prototype.__faNotificationNetworkBridge = true;
             return true;
           }
-          function tryInstall() {
+          const installDelays = [100, 250, 500, 1000, 2000, 4000, 8000];
+          function tryInstall(attempt = 0) {
             const ready = installFetch() && installXhr();
-            if (!ready) window.setTimeout(tryInstall, 50);
+            if (ready || attempt >= installDelays.length) return;
+            window.setTimeout(() => tryInstall(attempt + 1), installDelays[attempt]);
           }
           tryInstall();
         })();
@@ -180,8 +190,8 @@
     }
     window.addEventListener('message', handlePageNetworkMessage);
     installPageNetworkBridge();
-    async function upsert(notifications, changes = {}) {
-      if (!notifications.length) return;
+    async function upsert(notifications, changes = {}, announceUpdate = true) {
+      if (!notifications.length) return null;
       const db = await openDb();
       await new Promise((resolve, reject) => {
         const tx = db.transaction(STORE, 'readwrite');
@@ -190,9 +200,13 @@
         tx.onerror = () => reject(tx.error || new Error('Could not save notifications.'));
         tx.onabort = () => reject(tx.error || new Error('Could not save notifications.'));
       });
+      // count() reflects the actual object-store size, so duplicate IDs do
+      // not inflate the cached count. This is intentionally authoritative for
+      // network upserts and force sync pages, where an item may already exist.
       const cached = await result(db.transaction(STORE, 'readonly').objectStore(STORE).count());
       await saveMeta(db, { ...changes, cached, updatedAt: new Date().toISOString() });
-      announce();
+      if (announceUpdate) announce();
+      return { cached };
     }
     async function page(offset) {
       const response = await fetch(`/api/notifications?limit=${PAGE_SIZE}&offset=${offset}`, {
@@ -210,7 +224,8 @@
         const previous = await meta(db);
         const keys = new Set((await result(db.transaction(STORE, 'readonly').objectStore(STORE).getAllKeys())).map(String));
         let downloaded = 0;
-        setSyncState('syncing', { offset: 0, total: force ? keys.size : 0, cached: force ? 0 : keys.size, force, error: '' });
+        let cachedCount = keys.size;
+        setSyncState('syncing', { offset: 0, total: force ? keys.size : 0, cached: force ? 0 : cachedCount, force, error: '' });
         // A completed sync can stop at the first cached item. An interrupted
         // sync must first reach the last notification committed by its prior
         // run; cached items before that checkpoint do not prove that there is
@@ -253,10 +268,23 @@
           // Force mode deliberately writes every notification returned by every
           // page, including records already present in IndexedDB. It never
           // uses the cached-record boundary used by the normal sync.
-          await upsert(force ? notifications : fresh, { status: 'syncing', total: syncTotal, nextOffset: offset, ...checkpoint });
+          const saved = await upsert(
+            force ? notifications : fresh,
+            { status: 'syncing', total: syncTotal, nextOffset: offset, ...checkpoint },
+            false,
+          );
           offset += current.itemCount;
-          if (force) downloaded += notifications.length;
-          const overallDownloaded = await result(db.transaction(STORE, 'readonly').objectStore(STORE).count());
+          if (force) {
+            downloaded += notifications.length;
+            // The authoritative count from upsert() includes duplicate IDs.
+            // Never derive the store size from the number of downloaded rows.
+            if (saved) cachedCount = saved.cached;
+          } else {
+            // `fresh` is filtered against `keys`, so this increments only for
+            // IDs not already present, including partially cached pages.
+            cachedCount += fresh.length;
+          }
+          const overallDownloaded = cachedCount;
           await saveMeta(db, {
             status: 'syncing', total: syncTotal, cached: overallDownloaded, nextOffset: offset, ...checkpoint,
           });
@@ -272,9 +300,10 @@
           await new Promise(resolve => setTimeout(resolve, PAGE_DELAY));
           current = await page(offset);
         }
-        const overallDownloaded = await result(db.transaction(STORE, 'readonly').objectStore(STORE).count());
-        await saveMeta(db, { status: 'complete', total: syncTotal, cached: overallDownloaded, nextOffset: offset, updatedAt: new Date().toISOString() });
-        setSyncState('complete', { offset, total: syncTotal, cached: overallDownloaded, force: false, error: '' });
+        // `cachedCount` is exact: incremental sync adds only fresh IDs, while
+        // force sync receives the authoritative object-store count from upsert.
+        await saveMeta(db, { status: 'complete', total: syncTotal, cached: cachedCount, nextOffset: offset, updatedAt: new Date().toISOString() });
+        setSyncState('complete', { offset, total: syncTotal, cached: cachedCount, force: false, error: '' });
         announce();
         return true;
       };
@@ -840,9 +869,10 @@
           drawTargetSystems();
           return true;
         }
-        function tryInstall() {
-          if (install()) return;
-          window.setTimeout(tryInstall, 250);
+        const installDelays = [250, 250, 500, 1000, 2000, 4000, 8000];
+        function tryInstall(attempt = 0) {
+          if (install() || attempt >= installDelays.length) return;
+          window.setTimeout(() => tryInstall(attempt + 1), installDelays[attempt]);
         }
         window.addEventListener(EVENT_NAME, scheduleRedraw);
         window.addEventListener('fa-notifications-updated', () => {
@@ -876,7 +906,22 @@
     ensureMapControls();
   }
 
-  function schedule() {
+  function mutationTouchesTargetUi(records) {
+    return records.some(record => {
+      const target = record.target.nodeType === 1 ? record.target : record.target.parentElement;
+      if (target?.closest('#screen-systems, #panel-notifications')) return true;
+      if (record.type !== 'childList') return false;
+      return Array.from(record.addedNodes).some(node =>
+        node.nodeType === 1 && (
+          node.matches('#screen-systems, #panel-notifications') ||
+          node.querySelector('#screen-systems, #panel-notifications')
+        )
+      );
+    });
+  }
+
+  function schedule(records) {
+    if (!mutationTouchesTargetUi(records)) return;
     if (timer) clearTimeout(timer);
     timer = setTimeout(update, 150);
   }

@@ -84,7 +84,19 @@
   }
 
   let timer = null;
-  function schedule() {
+  function mutationTouchesDeployFrame(records) {
+    return records.some(record => {
+      const target = record.target.nodeType === 1 ? record.target : record.target.parentElement;
+      if (target?.closest('#deploy-fleet-frame')) return true;
+      if (record.type !== 'childList') return false;
+      return Array.from(record.addedNodes).some(node =>
+        node.nodeType === 1 && (node.matches('#deploy-fleet-frame') || node.querySelector('#deploy-fleet-frame'))
+      );
+    });
+  }
+
+  function schedule(records) {
+    if (!mutationTouchesDeployFrame(records)) return;
     if (timer) clearTimeout(timer);
     timer = setTimeout(() => {
       timer = null;

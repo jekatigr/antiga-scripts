@@ -82,7 +82,22 @@
   }
 
   let timer = null;
-  function schedule() {
+  function mutationTouchesMap(records) {
+    return records.some(record => {
+      const target = record.target.nodeType === 1 ? record.target : record.target.parentElement;
+      if (target?.closest('.galaxy-map-wrap, #screen-systems')) return true;
+      if (record.type !== 'childList') return false;
+      return Array.from(record.addedNodes).some(node =>
+        node.nodeType === 1 && (
+          node.matches('.galaxy-map-wrap, #screen-systems') ||
+          node.querySelector('.galaxy-map-wrap, #screen-systems')
+        )
+      );
+    });
+  }
+
+  function schedule(records) {
+    if (!mutationTouchesMap(records)) return;
     if (timer) clearTimeout(timer);
     timer = setTimeout(() => {
       timer = null;
@@ -91,12 +106,7 @@
   }
 
   const observer = new MutationObserver(schedule);
-  observer.observe(document.body, {
-    childList: true,
-    subtree: true,
-    attributes: true,
-    attributeFilter: ['class'],
-  });
+  observer.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ['class'] });
 
   update();
 })();

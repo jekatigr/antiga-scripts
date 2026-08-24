@@ -18,6 +18,7 @@
   let planetsCache = null;
   let planetsCacheAt = 0;
   let mapCache = null;
+  let mapCoordinates = null;
 
   function numeric(value) {
     const result = Number(value);
@@ -107,17 +108,33 @@
     const response = await window.req('GET', '/universe/map');
     const systems = response && Array.isArray(response.body) ? response.body : [];
     mapCache = systems;
+    mapCoordinates = new Map();
+    systems.forEach(item => {
+      const galaxy = numeric(item.galaxy);
+      const system = numeric(item.system);
+      const x = numeric(item.x);
+      const y = numeric(item.y);
+      if (galaxy !== null && system !== null && x !== null && y !== null) {
+        mapCoordinates.set(`${galaxy}:${system}`, { x, y });
+      }
+    });
     return systems;
   }
 
   function systemCoordinates(systems, galaxy, system) {
-    const match = systems.find(item =>
-      numeric(item.galaxy) === galaxy && numeric(item.system) === system
-    );
-    if (!match) return null;
-    const x = numeric(match.x);
-    const y = numeric(match.y);
-    return x === null || y === null ? null : { x, y };
+    if (!mapCoordinates) {
+      mapCoordinates = new Map();
+      systems.forEach(item => {
+        const itemGalaxy = numeric(item.galaxy);
+        const itemSystem = numeric(item.system);
+        const x = numeric(item.x);
+        const y = numeric(item.y);
+        if (itemGalaxy !== null && itemSystem !== null && x !== null && y !== null) {
+          mapCoordinates.set(`${itemGalaxy}:${itemSystem}`, { x, y });
+        }
+      });
+    }
+    return mapCoordinates.get(`${galaxy}:${system}`) || null;
   }
 
   function distanceToTarget(source, target, systems) {
@@ -152,14 +169,16 @@
     const target = { galaxy: 1, system: numeric(destSystem), position: numeric(destPosition) };
     if (target.system === null || target.position === null || planets.length === 0) return null;
 
-    return planets
-      .filter(planet => numeric(planet.id) !== null)
-      .map((planet, index) => ({
-        planet,
-        index,
-        distance: distanceToTarget(planet, target, systems),
-      }))
-      .sort((a, b) => a.distance - b.distance || a.index - b.index)[0]?.planet || null;
+    let nearest = null;
+    planets.forEach((planet, index) => {
+      if (numeric(planet.id) === null) return;
+      const distance = distanceToTarget(planet, target, systems);
+      if (!nearest || distance < nearest.distance ||
+          (distance === nearest.distance && index < nearest.index)) {
+        nearest = { planet, index, distance };
+      }
+    });
+    return nearest?.planet || null;
   }
 
   function install() {
@@ -193,10 +212,12 @@
 
   installPageBridge();
   install();
-  const timer = setInterval(() => {
+  const installDelays = [250, 250, 500, 1000, 2000, 4000, 8000];
+  function retryInstall(attempt = 0) {
     install();
-    if (typeof window.quickDeployFleet === 'function' && window.quickDeployFleet[WRAPPED_FLAG]) {
-      clearInterval(timer);
-    }
-  }, 250);
+    if (typeof window.quickDeployFleet === 'function' && window.quickDeployFleet[WRAPPED_FLAG]) return;
+    if (attempt >= installDelays.length) return;
+    setTimeout(() => retryInstall(attempt + 1), installDelays[attempt]);
+  }
+  retryInstall();
 })();

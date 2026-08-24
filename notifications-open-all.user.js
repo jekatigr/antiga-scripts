@@ -162,16 +162,20 @@
     }, 100);
   }
 
-  const observer = new MutationObserver(() => {
+  const observer = new MutationObserver(records => {
+    const relevant = records.some(record => {
+      const target = record.target.nodeType === 1 ? record.target : record.target.parentElement;
+      if (target?.closest('#panel-notifications')) return true;
+      if (record.type !== 'childList') return false;
+      return Array.from(record.addedNodes).some(node =>
+        node.nodeType === 1 && (node.matches('#panel-notifications') || node.querySelector('#panel-notifications'))
+      );
+    });
+    if (!relevant) return;
     updateNotificationTabState();
     schedule();
   });
-  observer.observe(document.body, {
-    childList: true,
-    subtree: true,
-    attributes: true,
-    attributeFilter: ['class'],
-  });
+  observer.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ['class'] });
   // Filter and pager buttons are re-rendered by the game, so use delegation.
   // Capture phase runs before the game's own click handlers start refreshing.
   document.addEventListener('click', flushBeforeNotificationNavigation, true);

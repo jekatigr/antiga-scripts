@@ -44,7 +44,19 @@
   }
 
   let timer = null;
-  function schedule() {
+  function mutationTouchesFleetPanel(records) {
+    return records.some(record => {
+      const target = record.target.nodeType === 1 ? record.target : record.target.parentElement;
+      if (target?.closest(PANEL_SELECTOR)) return true;
+      if (record.type !== 'childList') return false;
+      return Array.from(record.addedNodes).some(node =>
+        node.nodeType === 1 && (node.matches(PANEL_SELECTOR) || node.querySelector(PANEL_SELECTOR))
+      );
+    });
+  }
+
+  function schedule(records) {
+    if (!mutationTouchesFleetPanel(records)) return;
     if (timer) clearTimeout(timer);
     timer = setTimeout(() => {
       timer = null;
@@ -53,12 +65,7 @@
   }
 
   const observer = new MutationObserver(schedule);
-  observer.observe(document.body, {
-    childList: true,
-    subtree: true,
-    attributes: true,
-    attributeFilter: ['class']
-  });
+  observer.observe(document.body, { childList: true, subtree: true });
 
   moveFleetBlocks();
 })();

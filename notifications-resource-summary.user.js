@@ -71,17 +71,28 @@
     fleetsContainer?.querySelectorAll('.card .stat-row').forEach(addTotalToRow);
   }
 
-  function schedule() {
+  function mutationTouchesResourceRows(records) {
+    return records.some(record => {
+      const target = record.target.nodeType === 1 ? record.target : record.target.parentElement;
+      if (target?.closest('#notifications-container, #fleets-container')) return true;
+      if (record.type !== 'childList') return false;
+      return Array.from(record.addedNodes).some(node =>
+        node.nodeType === 1 && (
+          node.matches('#notifications-container, #fleets-container') ||
+          node.querySelector('#notifications-container, #fleets-container')
+        )
+      );
+    });
+  }
+
+  function schedule(records) {
+    if (!mutationTouchesResourceRows(records)) return;
     if (timer) clearTimeout(timer);
     timer = setTimeout(update, 150);
   }
 
   const observer = new MutationObserver(schedule);
-  observer.observe(document.body, {
-    childList: true,
-    characterData: true,
-    subtree: true,
-  });
+  observer.observe(document.body, { childList: true, characterData: true, subtree: true });
 
   update();
 })();
