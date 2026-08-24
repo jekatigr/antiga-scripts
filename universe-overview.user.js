@@ -768,6 +768,7 @@
     return td;
   }
   const GALAXY_ACTION_ICON = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path fill="currentColor" d="M11 13a1 1 0 1 1 0 2a1 1 0 0 1 0-2M8 2c1.407 0 2.698.7 3.61 1.84C12.515 4.974 13 6.472 13 8a1 1 0 1 1 2 0c0 .671-.267 1.28-.687 1.786c-.413.5-.98.908-1.623 1.23a9 9 0 0 1-2.191.735C9.7 11.916 8.852 12 8 12a1 1 0 1 1 0 2c-1.407 0-2.698-.7-3.61-1.84C3.485 11.027 3 9.528 3 8l-.005.103A1 1 0 0 1 1 8c0-.671.267-1.28.687-1.786c.413-.5.98-.908 1.624-1.23A9 9 0 0 1 5.5 4.25A12.4 12.4 0 0 1 8 4l-.103-.005A1 1 0 0 1 8 2m0 4c-.91 0-1.694.278-2.229.679C5.237 7.079 5 7.557 5 8s.237.92.771 1.321C6.306 9.722 7.091 10 8 10c.91 0 1.694-.278 2.229-.679C10.763 8.92 11 8.443 11 8s-.237-.92-.771-1.321C9.694 6.278 8.909 6 8 6M5 1a1 1 0 1 1 0 2a1 1 0 0 1 0-2"/></svg>';
+  const EXPLORE_ACTION_ICON = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" aria-hidden="true" focusable="false"><path fill="currentColor" fill-rule="evenodd" d="m380.656 106.622l-35.01 23.344l37.117 92.733l42.309-12.418zm-71.28 47.49L97.67 295.272l4.928 9.857l239.035-70.334zm90.3-111.445l83.57 194.995l-157.166 46.221l63.256 168.168l-39.95 14.982l-64.351-171.075l-28.928 8.49l-59.662 162.6l-39.217-16.808l47.999-130.816l-124.824 36.721l-37.736-75.472z"/></svg>';
   function actionButton(glyph, title, onClick) {
     const button = document.createElement('button');
     button.type = 'button'; button.title = title; button.setAttribute('aria-label', title);
@@ -1745,6 +1746,16 @@
         const move = actionButton('↗', 'Open planet', event => { event.stopPropagation(); closePanel(); if (typeof window.openPlanet === 'function') window.openPlanet(record.planetId); });
         actionInner.appendChild(move);
       } else {
+        if (record.position != null) {
+          const explore = actionButton(EXPLORE_ACTION_ICON, 'Send exploration fleet', event => {
+            event.stopPropagation();
+            closePanel();
+            if (typeof window.quickDeployFleet === 'function') {
+              window.quickDeployFleet(Number(record.system), Number(record.position), 'explore');
+            }
+          });
+          actionInner.appendChild(explore);
+        }
         const galaxy = actionButton(GALAXY_ACTION_ICON, 'Open galaxy system', event => { event.stopPropagation(); closePanel(); openGalaxyForRecord(record); });
         actionInner.appendChild(galaxy);
       }

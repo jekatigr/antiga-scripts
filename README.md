@@ -10,46 +10,42 @@ Quality-of-life userscripts for [Fonte Antiga](https://antiga.hatedabamboo.me), 
 
 ## Installation
 
-1. Install the [Tampermonkey](https://tampermonkey.net/) browser extension
-2. Click on any script below to open its source file
-3. Tampermonkey will detect the `.user.js` and prompt you to install it — click **Install**
+1. Install the [Tampermonkey](https://tampermonkey.net/) browser extension.
+2. Click a script name below to open its source file on GitHub.
+3. On GitHub, click the **Raw** button in the upper-right corner of the file view.
+4. Tampermonkey will detect the `.user.js` file and prompt you to install it — click **Install**.
 
 Alternatively, right-click a script link → **Save As…** then in Tampermonkey go to **Dashboard → + (Create a new blank user script)** and paste the contents.
 
+All scripts are self-contained and independent, so you can install any combination you like.
+
 ## Scripts
 
-### Fleet Block Order
-Moves the "Deploy Fleet" block above the "Active Fleets" list on the fleets tab — no more scrolling back and forth between deployment controls and your active missions.
+### [Universe Overview](https://github.com/jekatigr/antiga-scripts/blob/master/universe-overview.user.js)
+Adds an overview popup for your colonies and explored planets. Browse **My colonies** or **Explored planets**, then switch between colony overview, buildings, ships, and defenses. See resources, production, storage, capacities, queues, observed buildings, fleets, and defenses in one table, with search, sorting, filters, pagination, and per-colony update buttons. Use the Galaxy button beside a planet to jump directly to its galaxy system, or use the Explore button to launch the same exploration action available from the Galaxy planet list.
 
-### Launch Fleet and Advance
-Adds a **"Launch Fleet +1"** button next to the normal launch button. After a successful launch, it automatically increments the destination planet position by 1 — useful when launching fleets sequentially across multiple planets in the same system.
+> **Note:** The Explored planets view shows information learned from exploration reports and notifications. Notification synchronization appears on the Explored planets tab with progress and a red **Force re-sync** option when you need to rebuild the complete history. On the My colonies tab, **Refresh all colonies** updates your colonies one by one and shows the current progress.
 
-### Open All Notifications
-Adds an **"Open all"** button to the notifications panel. One click expands every unread notification currently shown and marks them read on the server immediately, while preserving their unread appearance until leaving the Notifications tab or changing the page/filter. Individual notification clicks retain the game's normal behavior.
+### [Fleet Block Order](https://github.com/jekatigr/antiga-scripts/blob/master/fleet-block-order.user.js)
+Keeps the **Deploy Fleet** controls above your **Active Fleets**, so you can launch missions without scrolling back and forth.
 
-### Resource Summary
-Appends a **Σ total** value after the resource columns in notification cards (exploration reports, battle results, harvests) and active fleet cargo rows. Gives you a quick sense of total haul without mentally adding Metal + Silicon + Helium.
+### [Launch Fleet and Advance](https://github.com/jekatigr/antiga-scripts/blob/master/fleet-launch-next.user.js)
+Adds **Launch Fleet +1** next to the normal launch button. After each successful launch, the destination position advances by one, making it easier to send fleets to several planets in sequence.
 
-### Dashboard Resource Separators
-Adds spaces between thousands in the dashboard's available/storage resource amounts, so `100000/7654321` is displayed as `100 000/7 654 321`.
+### [Open All Notifications](https://github.com/jekatigr/antiga-scripts/blob/master/notifications-open-all.user.js)
+Adds **Open all** to the Notifications panel. It expands every notification currently shown and marks them as read, while keeping their unread appearance until you leave the current page or notification view.
 
-### Notification Cache
-`Universe Overview` and `Notification Target Systems` include the same singleton notification-cache service. Whichever script is installed starts one shared service that captures notification responses already requested by the game and keeps the shared `fa.notifications` IndexedDB cache synchronized. The initial backfill is delayed and serialized, and unread increases schedule a short follow-up sync so normal game startup remains responsive. Updates are broadcast to all installed consumers.
+### [Resource Summary](https://github.com/jekatigr/antiga-scripts/blob/master/notifications-resource-summary.user.js)
+Shows a **Σ total** beside resource amounts in exploration reports, battle results, harvest reports, and active fleet cargo, so you can see the combined haul without adding Metal, Silicon, and Helium yourself.
 
-### Notification Target Systems
-Reads the shared notification cache directly from IndexedDB when the Galaxy tab opens, then marks matching systems on the map in memory. It does not persist notification marks in localStorage. Notification-type filters persist in localStorage.
+### [Dashboard Resource Separators](https://github.com/jekatigr/antiga-scripts/blob/master/dashboard-resource-separators.user.js)
+Makes large resource values easier to read by separating thousands. For example, `100000/7654321` becomes `100 000/7 654 321`.
 
-### Full-Width Galaxy Map
-Expands the galaxy map canvas to use the full width of the map frame instead of the game's default 640px limit, while keeping its default 640px height and circular system markers.
+### [Notification Target Systems](https://github.com/jekatigr/antiga-scripts/blob/master/notifications-target-systems.user.js)
+Highlights relevant systems directly on the Galaxy map based on your notification history. Use filters for Exploration, Expedition, Occupied, Attack, Transport, Harvest, Trade, and Other.
 
-### Explore From Nearest Colony
-Changes the Galaxy tab's **Explore** action to open the closest owned colony before preparing the exploration fleet, using the galaxy system coordinates and planet position as a tie-breaker.
+### [Full-Width Galaxy Map](https://github.com/jekatigr/antiga-scripts/blob/master/galaxy-map-full-width.user.js)
+Expands the Galaxy map to use the available width of the map frame, giving you more room to view distant systems while keeping the normal map height and system markers.
 
-### Universe Overview
-Adds a locally persisted Universe Overview table with **My colonies** and **Explored planets** tabs. My colonies contains Overview, Buildings, Ships, and Defenses subtabs; inventory subtabs add one quantity column per observed item across the colonies. Building, ship, and defense queue quantities appear as compact second-line text in the matching item cell, with the per-item build duration when available. My-colony rows are not expandable. Fewer than 100 owned colonies remain on one page; larger owned lists use the existing 20-row pagination, while explored results retain their existing pagination. It passively observes successful planet API responses already requested by the game and reads the shared notification cache; notification synchronization is handled by the delayed, serialized shared cache service, with no automatic game polling requests. The Notifications status at the right of the table status row shows downloaded/total progress; its dropdown exposes a red **force sync** action that re-fetches and upserts the complete notification history through the final page. A button above the table updates every owned colony one by one with a short delay, displays batch progress, and stays disabled while the batch is in progress; each row also has a manual update button beside the planet name. With default sorting, the last colony opened from the game sidebar is highlighted and pinned to the first row; after sorting a column, it follows the selected sort order. Unknown data remains marked as unknown rather than being fetched automatically.
-
-## Notes
-
-- All scripts are self-contained and independent — install any combination you like
-- Scripts use the game's own DOM structure and global functions (`req()`, `switchTab()`, etc.)
-- If a script stops working after a game update, check that the relevant DOM elements still match what the script expects
+### [Explore From Nearest Colony](https://github.com/jekatigr/antiga-scripts/blob/master/galaxy-explore-nearest-colony.user.js)
+When you choose **Explore** in the Galaxy tab, opens the closest colony first so the fleet launches from a nearby location and uses less travel time.
