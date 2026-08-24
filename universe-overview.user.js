@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Fonte Antiga - Universe Overview
 // @namespace    fa.universe-overview
-// @version      2.52.0
+// @version      2.53.0
 // @description  Locally summarize colonies with overview, building, ship, and defense inventory tabs
 // @match        *://antiga.hatedabamboo.me/*
 // @grant        none
@@ -1668,6 +1668,13 @@
     for (const [, key] of columnsForView()) { const current = cells[key]; if (current) { if (key === 'number') current.classList.add('fa-summary-number'); if (key === 'name') current.classList.add('fa-summary-planet-sticky'); row.appendChild(current); } }
     return row;
   }
+  function stableRecordSortKey(record) {
+    // Notification synchronization can replace a location-keyed record with a
+    // planet-keyed record, and IndexedDB does not promise getAll() order. Do
+    // not let that incidental Map insertion order decide ties in the table.
+    if (record.planetId != null) return `planet:${Number(record.planetId)}`;
+    return `location:${Number(record.galaxy) || 0}:${Number(record.system) || 0}:${Number(record.position) || 0}:${String(record.key || '')}`;
+  }
   function columnSortValue(record, columnKey) {
     const notification = record.owned === true ? null : recordNotifications(record);
     const report = notification?.exploration || {};
@@ -1739,7 +1746,12 @@
       const bIsCurrent = currentPlanetId != null && Number(b.planetId) === currentPlanetId;
       if (aIsCurrent !== bIsCurrent) return aIsCurrent ? -1 : 1;
       const left = sortValues.get(a.key), right = sortValues.get(b.key);
-      return (left < right ? -1 : left > right ? 1 : 0) * state.sortDirection;
+      const primary = (left < right ? -1 : left > right ? 1 : 0) * state.sortDirection;
+      // A notification arriving can rebuild/canonicalize records while the
+      // popup is open. If two rows have the same sort value, Array#sort would
+      // otherwise preserve whichever insertion order that rebuild happened to
+      // produce, making the rows appear to jump.
+      return primary || (stableRecordSortKey(a) < stableRecordSortKey(b) ? -1 : stableRecordSortKey(a) > stableRecordSortKey(b) ? 1 : 0);
     });
   }
   function columnWidthWeight(key) {
