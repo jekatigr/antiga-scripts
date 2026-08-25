@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Fonte Antiga - Universe Overview
 // @namespace    fa.universe-overview
-// @version      2.53.0
+// @version      2.53.1
 // @description  Locally summarize colonies with overview, building, ship, and defense inventory tabs
 // @match        *://antiga.hatedabamboo.me/*
 // @grant        none
@@ -119,6 +119,7 @@
     const META_KEY = 'sync';
     const PAGE_SIZE = 10;
     const PAGE_DELAY = 2000;
+    const PAGE_TIMEOUT = 30000;
     const UPDATE_EVENT = 'fa-notifications-updated';
     const SYNC_STATE_EVENT = 'fa-notifications-sync-state';
     const CHANNEL = 'fa.notifications';
@@ -152,10 +153,28 @@
           if (!store.indexNames.contains('notification_type')) store.createIndex('notification_type', 'notification_type');
           if (!db.objectStoreNames.contains(META)) db.createObjectStore(META, { keyPath: 'key' });
         };
+        let settled = false;
+        const timeout = setTimeout(() => {
+          if (settled) return;
+          settled = true;
+          reject(new Error('Could not open notification cache (timed out; another tab may be blocking IndexedDB).'));
+        }, 15000);
+        request.onblocked = () => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timeout);
+          reject(new Error('Could not open notification cache (blocked by another tab).'));
+        };
         request.onsuccess = () => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timeout);
           resolve(request.result);
         };
         request.onerror = () => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timeout);
           reject(request.error || new Error('Could not open notification cache.'));
         };
       });
@@ -271,13 +290,25 @@
       return { cached };
     }
     async function page(offset) {
-      const response = await fetch(`/api/notifications?limit=${PAGE_SIZE}&offset=${offset}`, {
-        credentials: 'same-origin', headers: { Accept: 'application/json' },
-      });
-      if (!response.ok) throw new Error(`Notification request failed (HTTP ${response.status}).`);
-      const body = await response.json();
-      if (!body || !Array.isArray(body.items)) throw new Error('Notification response has an unknown shape.');
-      return { notifications: items(body), itemCount: body.items.length, total: Number(body.total) || body.items.length };
+      const controller = typeof AbortController === 'function' ? new AbortController() : null;
+      const timeout = setTimeout(() => controller?.abort(), PAGE_TIMEOUT);
+      try {
+        const response = await fetch(`/api/notifications?limit=${PAGE_SIZE}&offset=${offset}`, {
+          credentials: 'same-origin', headers: { Accept: 'application/json' },
+          ...(controller ? { signal: controller.signal } : {}),
+        });
+        if (!response.ok) throw new Error(`Notification request failed (HTTP ${response.status}).`);
+        const body = await response.json();
+        if (!body || !Array.isArray(body.items)) throw new Error('Notification response has an unknown shape.');
+        return { notifications: items(body), itemCount: body.items.length, total: Number(body.total) || body.items.length };
+      } catch (error) {
+        if (controller?.signal.aborted) {
+          throw new Error(`Notification request timed out after ${PAGE_TIMEOUT / 1000}s (offset ${offset}).`);
+        }
+        throw error;
+      } finally {
+        clearTimeout(timeout);
+      }
     }
     async function sync(force = false) {
       if (syncPromise) return syncPromise;
@@ -384,7 +415,17 @@
           return result;
         })
         .catch(error => {
-          setSyncState('error', { error: error?.message || 'Notification sync failed.' });
+          const message = error?.message || 'Notification sync failed.';
+          setSyncState('error', { error: message, errorAt: new Date().toISOString() });
+          // Do not leave a transient network failure looking permanently stuck.
+          // The persisted syncing checkpoint lets the next attempt resume safely.
+          if (!syncPending && !syncTimer) {
+            syncTimer = setTimeout(() => {
+              syncTimer = null;
+              sync().catch(() => {});
+            }, 10000);
+          }
+          return false;
         })
         .finally(() => {
           syncPromise = null;
