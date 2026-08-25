@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Fonte Antiga - Explore From Nearest Colony
 // @namespace    fa.galaxy-explore-nearest-colony
-// @version      1.1.1
+// @version      1.1.2
 // @description  Start Galaxy exploration missions from the closest owned colony
 // @match        *://antiga.hatedabamboo.me/*
 // @grant        none

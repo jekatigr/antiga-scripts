@@ -1,7 +1,7 @@
 // ==UserScript==
-// @name         Fonte Antiga - Expand Unread Notifications
-// @namespace    fa.notifications-expand-unread
-// @version      1.3.0
+// @name         Fonte Antiga - Open All Notifications
+// @namespace    fa.notifications-open-all
+// @version      1.3.1
 // @description  Open all notifications and mark them read without changing their appearance until leaving the current view
 // @match        *://antiga.hatedabamboo.me/*
 // @grant        none

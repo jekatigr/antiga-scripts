@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Fonte Antiga - Launch Fleet and Advance
 // @namespace    fa.fleet-launch-next
-// @version      1.1.0
+// @version      1.1.1
 // @description  Add a second fleet launch button that advances the destination planet after a successful launch
 // @match        *://antiga.hatedabamboo.me/*
 // @grant        none

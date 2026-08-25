@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Fonte Antiga - Resource Summary
 // @namespace    fa.res-summary
-// @version      1.1.1
+// @version      1.1.2
 // @description  Show Σ total after resources in notification cards and active fleet cargo rows
 // @match        *://antiga.hatedabamboo.me/*
 // @grant        none
