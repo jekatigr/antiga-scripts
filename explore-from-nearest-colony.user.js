@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Fonte Antiga - Explore From Nearest Colony
 // @namespace    fa.galaxy-explore-nearest-colony
-// @version      1.1.2
+// @version      1.1.3
 // @description  Start Galaxy exploration missions from the closest owned colony
 // @match        *://antiga.hatedabamboo.me/*
 // @grant        none
@@ -14,7 +14,10 @@
   const WRAPPED_FLAG = '__faExploreNearestColonyWrapped';
   const ORIGIN_EVENT = 'fa-explore-nearest-colony-origin';
   const ORIGIN_BRIDGE_MARKER = 'faExploreNearestColonyBridge';
-  const PLANETS_CACHE_TTL = 30 * 1000;
+  // Colony coordinates change infrequently. Retaining them avoids a
+  // /planets/me request when several exploration fleets are launched in one
+  // session, while still allowing eventual discovery of a new/relocated colony.
+  const PLANETS_CACHE_TTL = 5 * 60 * 1000;
   let planetsCache = null;
   let planetsCacheAt = 0;
   let mapCache = null;

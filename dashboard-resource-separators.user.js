@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Fonte Antiga - Dashboard Resource Separators
 // @namespace    fa.dashboard-resource-separators
-// @version      1.3.1
+// @version      1.3.2
 // @description  Add space separators to available and storage resource amounts on the dashboard
 // @match        *://antiga.hatedabamboo.me/*
 // @grant        none
@@ -112,7 +112,19 @@
 
     // Watch only for replacement of the resource container. Actual number
     // updates are handled by the narrowly scoped observer above.
-    const shellObserver = new MutationObserver(attachResourceObserver);
+    // The game mutates many unrelated widgets in #game-layout (fleet timers,
+    // queues, notifications). Re-querying the complete shell for every one
+    // of those mutations made this small formatting script do work constantly.
+    // Coalesce replacement checks; the focused observer above still formats
+    // resource numbers synchronously after their own DOM updates.
+    let attachTimer = null;
+    const shellObserver = new MutationObserver(() => {
+      if (attachTimer) return;
+      attachTimer = setTimeout(() => {
+        attachTimer = null;
+        attachResourceObserver();
+      }, 100);
+    });
     shellObserver.observe(shell, { childList: true, subtree: true });
     attachResourceObserver();
   }

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Fonte Antiga - Universe Overview
 // @namespace    fa.universe-overview
-// @version      2.53.2
+// @version      2.53.3
 // @description  Locally summarize colonies with overview, building, ship, and defense inventory tabs
 // @match        *://antiga.hatedabamboo.me/*
 // @grant        none
@@ -216,10 +216,13 @@
           if (window.__faNotificationNetworkBridge) return;
           window.__faNotificationNetworkBridge = true;
           const SOURCE = 'fa.notifications.network';
-          function report(url, status, text) {
-            let path;
-            try { path = new URL(url, location.href).pathname; } catch (_) { return; }
-            if (path !== '/api/poll' && path !== '/api/notifications') return;
+          function relevantPath(url) {
+            try {
+              const path = new URL(url, location.href).pathname;
+              return path === '/api/poll' || path === '/api/notifications' ? path : null;
+            } catch (_) { return null; }
+          }
+          function report(path, status, text) {
             let body;
             try { body = JSON.parse(text); } catch (_) { return; }
             window.postMessage({ source: SOURCE, path, status, body }, '*');
@@ -229,8 +232,11 @@
             const nativeFetch = window.fetch;
             function wrappedFetch(...args) {
               const url = args[0] && args[0].url ? args[0].url : args[0];
+              const path = relevantPath(url);
               const request = nativeFetch.apply(this, args);
-              request.then(response => response.clone().text().then(text => report(url, response.status, text))).catch(() => {});
+              // Do not clone/read every game response. Large map, fleet, and
+              // planet payloads were needlessly parsed just to discard them.
+              if (path) request.then(response => response.clone().text().then(text => report(path, response.status, text))).catch(() => {});
               return request;
             }
             wrappedFetch.__faNotificationNetworkBridge = true;
@@ -246,7 +252,8 @@
               return nativeOpen.call(this, method, url, ...args);
             };
             XMLHttpRequest.prototype.send = function (...args) {
-              this.addEventListener('load', () => report(this.__faNotificationNetworkBridgeUrl, this.status, this.responseText));
+              const path = relevantPath(this.__faNotificationNetworkBridgeUrl);
+              if (path) this.addEventListener('load', () => report(path, this.status, this.responseText));
               return nativeSend.apply(this, args);
             };
             XMLHttpRequest.prototype.__faNotificationNetworkBridge = true;
