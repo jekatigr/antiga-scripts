@@ -30,7 +30,7 @@ Adds an overview popup for your colonies and explored planets. Browse **My colon
 Keeps the **Deploy Fleet** controls above your **Active Fleets**, so you can launch missions without scrolling back and forth.
 
 ### [Launch Fleet and Advance](https://github.com/jekatigr/antiga-scripts/blob/master/launch-fleet-and-advance.user.js)
-Adds **Launch Fleet +1** next to the normal launch button. After each successful launch, the destination position advances by one, making it easier to send fleets to several planets in sequence.
+Adds **Launch Fleet +1** and a range-labelled launch button next to the normal launch button. After each successful launch, **Launch Fleet +1** advances the destination position by one. The range-labelled button, for example **Launch to 5-20**, repeats the currently selected fleet configuration for the planets at and after the current position, stopping at the first limit reached: available ships, remaining fleet-command slots, or planets left in the system. While launching, it shows progress and waits 1 second between fleets.
 
 ### [Open All Notifications](https://github.com/jekatigr/antiga-scripts/blob/master/open-all-notifications.user.js)
 Adds **Open all** to the Notifications panel. It expands every notification currently shown and marks them as read, while keeping their unread appearance until you leave the current page or notification view.
