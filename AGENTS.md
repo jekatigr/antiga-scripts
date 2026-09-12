@@ -234,6 +234,7 @@ These are the actual JavaScript modules loaded by the saved page. Userscripts in
 ### Rules
 
 0. **Update tested version:** When making changes to scripts, update the "Tested With" table in README.md with the current game version (found in page source HTML as `version` in `<head>`). This keeps users informed about compatibility.
+1. **Bump script version:** Any change to any userscript must also increment its `@version` value in the Tampermonkey metadata comment at the top of that script.
 1. **Local files only:** Always check local project files before anything else. Never use web search — all research and answers must come from local files (saved HTML, JS modules, existing scripts, AGENTS.md).
 1. **CSS class prefix:** Always use `.fa-` to avoid colliding with game styles
 2. **No `@grant`:** Don't use Tampermonkey GM_* APIs unless needed — the game's `req()` is already global
