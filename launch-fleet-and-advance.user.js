@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Fonte Antiga - Launch Fleet and Advance
 // @namespace    fa.fleet-launch-next
-// @version      1.3.6
+// @version      1.3.7
 // @description  Add buttons to launch one fleet and to launch as many fleets as possible while advancing destinations
 // @match        *://antiga.hatedabamboo.me/*
 // @grant        none
@@ -70,6 +70,8 @@
     .fa-launch-max-wrap {
       position: relative;
       display: inline-flex;
+      align-items: center;
+      vertical-align: middle;
     }
     .fa-launch-max-wrap .fa-launch-max-btn {
       padding-right: 2.1em;
@@ -78,9 +80,10 @@
       display: none;
       position: absolute;
       right: 0.35em;
-      top: 50%;
+      top: 0;
+      bottom: 0;
       z-index: 3;
-      transform: translateY(-50%);
+      margin-block: auto;
       align-items: center;
       justify-content: center;
       width: 1.35em;
