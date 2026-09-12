@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Fonte Antiga - Universe Overview
 // @namespace    fa.universe-overview
-// @version      2.54.9
+// @version      2.54.10
 // @description  Locally summarize colonies with overview, building, ship, and defense inventory tabs
 // @match        *://antiga.hatedabamboo.me/*
 // @grant        none
@@ -99,6 +99,7 @@
     sidebarSyncTimer: null,
     notificationsLoadPromise: null,
     notificationsLoadQueued: false,
+    notificationsReloadTimer: null,
     // Valid only for one render. It avoids rescanning every owned planet and
     // its inventory once per row while an inventory tab is being built.
     renderInventoryCatalog: null,
@@ -1388,6 +1389,18 @@
     return state.notificationsLoadPromise;
   }
 
+  // Notification upserts can arrive through both the page-network bridge and
+  // the shared cache's BroadcastChannel. Rebuilding the full IndexedDB index
+  // for every delivery becomes expensive as the history grows, so coalesce a
+  // burst (especially new-notification polling) into one reload.
+  function scheduleNotificationLoad(delay = 750) {
+    if (state.notificationsReloadTimer) clearTimeout(state.notificationsReloadTimer);
+    state.notificationsReloadTimer = setTimeout(() => {
+      state.notificationsReloadTimer = null;
+      loadNotifications();
+    }, delay);
+  }
+
   function recordNotifications(record) {
     const locationKey = Number.isSafeInteger(Number(record.system)) && Number.isSafeInteger(Number(record.position))
       ? `location:${Number(record.system)}:${Number(record.position)}` : null;
@@ -2399,6 +2412,7 @@
     if (!state.panel) return;
     state.panel.classList.remove('hidden');
     state.renderedView = null;
+    if (state.notificationsReloadTimer) { clearTimeout(state.notificationsReloadTimer); state.notificationsReloadTimer = null; }
     loadNotifications();
     renderTable();
   }
@@ -2572,12 +2586,12 @@
   }
   state.notificationSync = window.__faNotificationCacheService?.getSyncState?.() || { state: 'idle' };
   window.addEventListener(NOTIFICATION_SYNC_STATE_EVENT, event => handleNotificationSyncState(event.detail));
-  window.addEventListener('fa-notifications-updated', () => loadNotifications());
+  window.addEventListener('fa-notifications-updated', () => scheduleNotificationLoad());
   if (typeof BroadcastChannel !== 'undefined') {
     try {
       const notificationChannel = new BroadcastChannel('fa.notifications');
       notificationChannel.addEventListener('message', event => {
-        if (event.data && event.data.type === 'fa-notifications-updated') loadNotifications();
+        if (event.data && event.data.type === 'fa-notifications-updated') scheduleNotificationLoad();
         if (event.data && event.data.type === NOTIFICATION_SYNC_STATE_EVENT) handleNotificationSyncState(event.data.detail);
       });
     } catch (_) {}
