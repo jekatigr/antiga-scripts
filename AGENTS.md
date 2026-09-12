@@ -12,8 +12,8 @@ The `sources/` folder is a separate Git repository nested inside this project. I
 - **Resources:** Metal (M), Silicon (S), Helium (H)
 - **Planets:** Player-owned planets with production buildings, storage, shipyards
 - **Planet features:** Ausente relics (`has_relic_building`), stellar objects (`has_stellar_object_feature`, `stellar_object_name`, `stellar_object_description`) — both provide resource income bonuses
-- **Fleet actions:** Explore, Colonize, Attack, Transport, Harvest debris
-- **Notifications:** Exploration reports, battle results, transport deliveries, harvest results, incoming attacks
+- **Fleet actions:** Explore, Colonize, Attack, Transport, Harvest debris, Expedition, Recover, Relocate
+- **Notifications:** Exploration reports, expedition results, battle results, transport deliveries, harvest results, recovery results, relocation results, incoming attacks
 
 ## Architecture
 
@@ -53,6 +53,7 @@ req('DELETE', '/notifications?mission_type=transport')
 | GET | `/planets/:id/defenses` | Planetary defense inventory and stats |
 | GET | `/planets/:id/ships` | Stationed ship inventory and stats |
 | GET | `/fleets?active=true` | Active outbound/inbound fleets, ships, cargo, mission, and timing |
+| GET | `/fleets/capacity` | Current Fleet Command slot usage and maximum capacity |
 
 #### Notification Types
 
@@ -61,10 +62,15 @@ req('DELETE', '/notifications?mission_type=transport')
 - `scan_repelled` – your defenses destroyed an exploration fleet before its scan completed
 - `exploration_lost` – exploration fleet destroyed
 - `exploration` – exploration report (buildings, fleet, resources, debris). May include `stellar_object_detected`, `stellar_object_name`, `stellar_object_description` when a stellar object is found via Voyager Probe
+- `expedition_returned` / `expedition_lost` – deep-space expedition result
 - `transport_delivered` / `transport_gathered` – resource transfer
 - `debris_harvested` – harvest result (metal + silicon only, no helium)
+- `debris_wreckers_inbound` – incoming scavenger fleet
 - `relocate_arrived` – fleet relocation
-- `recover_gathered` – recovered population and automatons
+- `recover_gathered` / `recover_lost` – recovered or lost population and automatons
+- `colonize_arrived` – colonization result
+- `abandon_arrived` – colony abandonment result
+- `trade_offer_filled` / `trade_offer_expired` / `trade_fleet_returned` – trade fleet result
 - `battle_report` – attack/defense outcome with loot
 
 #### Representative notification object shapes
@@ -245,9 +251,9 @@ Resources are rendered as `<span class="stat stat-m">` containing an inline SVG 
 
 | Script | Description |
 |--------|-------------|
-| `notifications-resource-summary.user.js` | Adds `Σ total` inline after resources in each notification card's stat row |
-| `notifications-open-all.user.js` | Adds an "Open all" button for currently shown notifications |
-| `planets-summary.user.js` | Adds a local summary of observed planets, queues, defenses, stationed ships, active fleets, and notification intelligence |
+| `resource-summary.user.js` | Adds `Σ total` inline after resources in each notification card's stat row |
+| `open-all-notifications.user.js` | Adds an "Open all" button for currently shown notifications |
+| `universe-overview.user.js` | Adds a local summary of observed planets, queues, defenses, stationed ships, active fleets, and notification intelligence |
 
 ## Planet Summary Data Contracts
 
