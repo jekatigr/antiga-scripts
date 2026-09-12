@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Fonte Antiga - Universe Overview
 // @namespace    fa.universe-overview
-// @version      2.54.5
+// @version      2.54.9
 // @description  Locally summarize colonies with overview, building, ship, and defense inventory tabs
 // @match        *://antiga.hatedabamboo.me/*
 // @grant        none
@@ -99,6 +99,9 @@
     sidebarSyncTimer: null,
     notificationsLoadPromise: null,
     notificationsLoadQueued: false,
+    // Valid only for one render. It avoids rescanning every owned planet and
+    // its inventory once per row while an inventory tab is being built.
+    renderInventoryCatalog: null,
   };
 
   // Shared notification-cache service. This intentionally lives in every
@@ -650,10 +653,22 @@
     .fa-summary-status-value { color: var(--fg) !important; opacity: 1 !important; }
     .fa-summary-table tbody tr > td.fa-summary-na, .fa-summary-table tbody tr > td.fa-summary-empty,
     .fa-summary-table tbody tr > td:has(> .fa-summary-na), .fa-summary-table tbody tr > td:has(> .fa-summary-empty) { background: var(--bg, #0a0d13) !important; opacity: 1; }
+    /* Empty totals still belong to the aggregate row: do not let the normal
+       empty-cell background overwrite its shared summary tint. */
+    .fa-summary-table tbody tr.fa-summary-total-row > td.fa-summary-na,
+    .fa-summary-table tbody tr.fa-summary-total-row > td.fa-summary-empty,
+    .fa-summary-table tbody tr.fa-summary-total-row > td:has(> .fa-summary-na),
+    .fa-summary-table tbody tr.fa-summary-total-row > td:has(> .fa-summary-empty) { background: var(--panel-alt) !important; background: rgba(var(--accent-rgb), .16) !important; }
     .fa-summary-table tbody tr:hover > td.fa-summary-na, .fa-summary-table tbody tr:hover > td.fa-summary-empty,
     .fa-summary-table tbody tr:hover > td:has(> .fa-summary-na), .fa-summary-table tbody tr:hover > td:has(> .fa-summary-empty),
     .fa-summary-table tbody tr.fa-summary-row-expanded > td.fa-summary-na, .fa-summary-table tbody tr.fa-summary-row-expanded > td.fa-summary-empty,
     .fa-summary-table tbody tr.fa-summary-row-expanded > td:has(> .fa-summary-na), .fa-summary-table tbody tr.fa-summary-row-expanded > td:has(> .fa-summary-empty) { background: transparent !important; opacity: 1; }
+    /* Keep empty Total-row cells tinted even while the row is hovered. This
+       must follow the generic hover reset immediately above. */
+    .fa-summary-table tbody tr.fa-summary-total-row:hover > td.fa-summary-na,
+    .fa-summary-table tbody tr.fa-summary-total-row:hover > td.fa-summary-empty,
+    .fa-summary-table tbody tr.fa-summary-total-row:hover > td:has(> .fa-summary-na),
+    .fa-summary-table tbody tr.fa-summary-total-row:hover > td:has(> .fa-summary-empty) { background: var(--panel-alt) !important; background: rgba(var(--accent-rgb), .16) !important; }
     .fa-summary-table tbody tr.fa-summary-row-current > td { background: rgba(var(--accent-rgb), .12) !important; }
     .fa-summary-table tbody tr.fa-summary-row-current > td.fa-summary-planet-sticky { background: rgba(var(--accent-rgb), .12) !important; box-shadow: 1px 0 0 var(--border-soft); }
     .fa-summary-table tbody tr.fa-summary-row-current:hover > td { background: var(--panel-alt) !important; }
@@ -1629,6 +1644,8 @@
   function inventoryCatalog() {
     const spec = inventorySpec();
     if (!spec) return [];
+    const cached = state.renderInventoryCatalog;
+    if (cached && cached.subview === state.ownedSubview) return cached.items;
     const catalog = new Map();
     const orderByKey = state.inventoryOrder[state.ownedSubview];
     for (const record of state.records.values()) {
@@ -1646,7 +1663,9 @@
         });
       });
     }
-    return [...catalog.values()].sort((a, b) => a.order - b.order || a.label.localeCompare(b.label));
+    const items = [...catalog.values()].sort((a, b) => a.order - b.order || a.label.localeCompare(b.label));
+    state.renderInventoryCatalog = { subview: state.ownedSubview, items };
+    return items;
   }
   function inventoryQuantity(spec, item) { return Math.max(0, number(spec.quantity(item))); }
   function formatDurationPerItem(seconds) {
@@ -1729,7 +1748,8 @@
     return { total, known };
   }
   function totalCell(value, className = '') {
-    return cell(value.known ? fmt(value.total) : '?', null, `${className}${value.known ? '' : ' fa-summary-na'}`.trim());
+    const empty = value.known && value.total === 0;
+    return cell(value.known ? (empty ? '—' : fmt(value.total)) : '?', null, `${className}${!value.known || empty ? ' fa-summary-na' : ''}`.trim());
   }
   function totalIconCell(rows) {
     return iconStackedCell(rows.map(([icon, value, prefix = '', suffix = '']) => [icon, value.known ? `${prefix}${fmt(value.total)}${suffix}` : '?']), undefined, rows.some(([, value]) => !value.known) ? 'fa-summary-na' : '');
@@ -2057,11 +2077,11 @@
       default: return '';
     }
   }
-  function matchingRecords() {
+  function matchingRecords(includeSearch = true) {
     sidebarPlanets(false);
     lastOpenedOwnedPlanetId();
     if (state.recordsNeedCanonicalize) canonicalizeRecords();
-    const query = state.search.trim().toLowerCase();
+    const query = includeSearch ? state.search.trim().toLowerCase() : '';
     const unique = new Map();
     for (const record of state.records.values()) {
       if (state.view === 'owned' && record.owned !== true) continue;
@@ -2151,7 +2171,10 @@
   }
 
   function renderTable() {
-    if (!state.panel) return;
+    // Data observers remain active while the popup is closed, but rebuilding a
+    // hidden table is pure wasted work and caused the background CPU spikes.
+    if (!state.panel || state.panel.classList.contains('hidden')) return;
+    state.renderInventoryCatalog = null;
     const tableWrap = state.panel.querySelector('.fa-summary-table-wrap');
     const viewKey = `${state.view}:${state.ownedSubview}`;
     const viewChanged = state.renderedView !== viewKey;
@@ -2159,6 +2182,9 @@
     if (!tbody) return;
     tbody.replaceChildren();
     const allRecords = matchingRecords();
+    // The summary is deliberately independent of the search field. Only pay
+    // for the second record pass when a search is actually active.
+    const summaryRecords = state.view === 'owned' && state.search.trim() ? matchingRecords(false) : allRecords;
     const paginationEnabled = state.view !== 'owned' || allRecords.length >= 100;
     const effectivePageSize = paginationEnabled ? (state.view === 'explored' ? 25 : state.pageSize) : Math.max(1, allRecords.length);
     const pageCount = Math.max(1, Math.ceil(allRecords.length / effectivePageSize));
@@ -2169,7 +2195,7 @@
     const table = state.panel.querySelector('.fa-summary-table');
     if (table) applyColumnWidths(table, viewColumns);
     const colspan = viewColumns.length;
-    if (state.view === 'owned') tbody.appendChild(makeTotalRow(allRecords));
+    if (state.view === 'owned') tbody.appendChild(makeTotalRow(summaryRecords));
     records.forEach((record, index) => {
       tbody.appendChild(makeRow(record, start + index + 1));
       if (state.view !== 'owned' && state.expanded.has(record.key)) tbody.appendChild(renderDetails(record, colspan));
@@ -2368,7 +2394,7 @@
     if (!menu.hidden) requestAnimationFrame(() => { positionFilterMenu(menu, button); menu.focus(); });
     sync();
   }
-  function scheduleRender() { if (!state.panel || state.refreshingAll || state.renderTimer) return; state.renderTimer = setTimeout(() => { state.renderTimer = null; renderTable(); }, 80); }
+  function scheduleRender() { if (!state.panel || state.panel.classList.contains('hidden') || state.refreshingAll || state.renderTimer) return; state.renderTimer = setTimeout(() => { state.renderTimer = null; renderTable(); }, 80); }
   function openPanel() {
     if (!state.panel) return;
     state.panel.classList.remove('hidden');
