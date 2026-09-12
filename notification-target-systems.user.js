@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Fonte Antiga - Notification Target Systems
 // @namespace    fa.notifications-target-systems
-// @version      1.6.5
+// @version      1.6.6
 // @description  Cache notifications locally and mark their target systems on the galaxy map
 // @match        *://antiga.hatedabamboo.me/*
 // @grant        none
@@ -43,7 +43,7 @@
   // notification consumer so either script works when installed alone.
   (function startNotificationCacheService() {
     const SERVICE_KEY = '__faNotificationCacheService';
-    const SERVICE_VERSION = 2;
+    const SERVICE_VERSION = 3;
     if (window[SERVICE_KEY]) {
       if (window[SERVICE_KEY].version !== SERVICE_VERSION) {
         window.alert(`Fonte Antiga notification scripts are incompatible. Update all notification scripts to version ${SERVICE_VERSION}.`);
@@ -68,6 +68,8 @@
     let lastUnread = null;
     let syncState = { state: 'idle', offset: 0, total: 0, cached: 0, error: '' };
     let announceTimer = null;
+    let knownIds = null;
+    const pendingAnnouncements = new Map();
     const channel = typeof BroadcastChannel === 'undefined' ? null : new BroadcastChannel(CHANNEL);
 
     function result(request) {
@@ -129,15 +131,15 @@
         .filter(item => item && item.kind !== 'game_news' && item.notification && item.notification.id != null)
         .map(item => item.notification) : [];
     }
-    function announce() {
-      // Multiple interception layers can observe the same API response in
-      // the same turn. Coalesce those notifications so consumers rebuild
-      // their indexes at most once per task.
+    function announce(notifications = []) {
+      notifications.forEach(notification => pendingAnnouncements.set(String(notification.id), notification));
       if (announceTimer) return;
       announceTimer = setTimeout(() => {
         announceTimer = null;
-        window.dispatchEvent(new Event(UPDATE_EVENT));
-        try { channel?.postMessage({ type: UPDATE_EVENT }); } catch (_) {}
+        const detail = { notifications: [...pendingAnnouncements.values()] };
+        pendingAnnouncements.clear();
+        window.dispatchEvent(new CustomEvent(UPDATE_EVENT, { detail }));
+        try { channel?.postMessage({ type: UPDATE_EVENT, detail }); } catch (_) {}
       }, 0);
     }
     function setSyncState(stateName, changes = {}) {
@@ -217,22 +219,23 @@
     window.addEventListener('message', handlePageNetworkMessage);
     installPageNetworkBridge();
     async function upsert(notifications, changes = {}, announceUpdate = true) {
-      if (!notifications.length) return null;
       const db = await openDb();
-      await new Promise((resolve, reject) => {
-        const tx = db.transaction(STORE, 'readwrite');
-        notifications.forEach(notification => tx.objectStore(STORE).put(notification));
-        tx.oncomplete = resolve;
-        tx.onerror = () => reject(tx.error || new Error('Could not save notifications.'));
-        tx.onabort = () => reject(tx.error || new Error('Could not save notifications.'));
-      });
-      // count() reflects the actual object-store size, so duplicate IDs do
-      // not inflate the cached count. This is intentionally authoritative for
-      // network upserts and force sync pages, where an item may already exist.
-      const cached = await result(db.transaction(STORE, 'readonly').objectStore(STORE).count());
-      await saveMeta(db, { ...changes, cached, updatedAt: new Date().toISOString() });
-      if (announceUpdate) announce();
-      return { cached };
+      if (!knownIds) knownIds = new Set((await result(db.transaction(STORE, 'readonly').objectStore(STORE).getAllKeys())).map(String));
+      const fresh = notifications.filter(notification => notification?.id != null && !knownIds.has(String(notification.id)));
+      if (fresh.length) {
+        await new Promise((resolve, reject) => {
+          const tx = db.transaction(STORE, 'readwrite');
+          fresh.forEach(notification => tx.objectStore(STORE).put(notification));
+          tx.oncomplete = resolve;
+          tx.onerror = () => reject(tx.error || new Error('Could not save notifications.'));
+          tx.onabort = () => reject(tx.error || new Error('Could not save notifications.'));
+        });
+        fresh.forEach(notification => knownIds.add(String(notification.id)));
+      }
+      const cached = knownIds.size;
+      if (fresh.length || Object.keys(changes).length) await saveMeta(db, { ...changes, cached, updatedAt: new Date().toISOString() });
+      if (announceUpdate && fresh.length) announce(fresh);
+      return { cached, fresh };
     }
     async function page(offset) {
       const controller = typeof AbortController === 'function' ? new AbortController() : null;
@@ -261,6 +264,7 @@
         const db = await openDb();
         const previous = await meta(db);
         const keys = new Set((await result(db.transaction(STORE, 'readonly').objectStore(STORE).getAllKeys())).map(String));
+        knownIds = keys;
         let downloaded = 0;
         let cachedCount = keys.size;
         setSyncState('syncing', { offset: 0, total: force ? keys.size : 0, cached: force ? 0 : cachedCount, force, error: '' });
@@ -413,41 +417,9 @@
       await saveMeta(db, { unreadCount: unread });
       if (Number.isFinite(old) && unread > old) scheduleSync(2000);
     }
-    function inspect(url, response) {
-      if (!response || !response.ok) return;
-      let path = '';
-      try { path = new URL(url, location.href).pathname; } catch (_) { return; }
-      if (path === '/api/poll') response.clone().json().then(poll).catch(() => {});
-      if (path === '/api/notifications') response.clone().json().then(body => upsert(items(body))).catch(() => {});
-    }
-    if (window.fetch && !window.fetch.__faNotificationCache) {
-      const nativeFetch = window.fetch;
-      const wrappedFetch = function (...args) {
-        const url = args[0] && args[0].url ? args[0].url : args[0];
-        const request = nativeFetch.apply(this, args);
-        request.then(response => inspect(url, response)).catch(() => {});
-        return request;
-      };
-      wrappedFetch.__faNotificationCache = true;
-      window.fetch = wrappedFetch;
-    }
-    if (window.XMLHttpRequest && !XMLHttpRequest.prototype.__faNotificationCache) {
-      const nativeOpen = XMLHttpRequest.prototype.open;
-      const nativeSend = XMLHttpRequest.prototype.send;
-      XMLHttpRequest.prototype.open = function (method, url, ...args) {
-        this.__faNotificationCacheUrl = url;
-        return nativeOpen.call(this, method, url, ...args);
-      };
-      XMLHttpRequest.prototype.send = function (...args) {
-        this.addEventListener('load', () => {
-          if (this.status >= 200 && this.status < 300) {
-            try { inspect(this.__faNotificationCacheUrl, new Response(this.responseText, { status: this.status })); } catch (_) {}
-          }
-        });
-        return nativeSend.apply(this, args);
-      };
-      XMLHttpRequest.prototype.__faNotificationCache = true;
-    }
+    // The page-context bridge above is the only response observer. Keeping a
+    // second userscript-context fetch/XHR wrapper duplicated every notification
+    // parse, IndexedDB transaction, and update event.
     // Start a delayed, serialized backfill so the game's initial rendering and
     // requests get priority. Later unread increases schedule a short sync.
     window[SERVICE_KEY] = { version: SERVICE_VERSION, sync, forceSync, getSyncState: () => ({ ...syncState }) };
