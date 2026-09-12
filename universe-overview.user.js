@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Fonte Antiga - Universe Overview
 // @namespace    fa.universe-overview
-// @version      2.54.16
+// @version      2.54.17
 // @description  Locally summarize colonies with overview, building, ship, and defense inventory tabs
 // @match        *://antiga.hatedabamboo.me/*
 // @grant        none
@@ -499,9 +499,10 @@
   style.textContent = `
     .planet-sidebar-title { display: flex; align-items: center; justify-content: space-between; gap: .5rem; }
     .fa-summary-sidebar-btn { flex: 0 0 auto; margin: 0; padding: .35rem .65rem; white-space: nowrap; }
-    .fa-summary-overlay { position: fixed; inset: 0; z-index: 10000; display: flex; justify-content: center; align-items: flex-start; padding: 1vh .5vw; background: rgba(0,0,0,.7); }
+    body.fa-summary-modal-open { overflow: hidden !important; }
+    .fa-summary-overlay { position: fixed; inset: 0; z-index: 10000; display: flex; justify-content: center; align-items: flex-start; padding: 1vh .5vw; background: rgba(0,0,0,.7); overscroll-behavior: contain; }
     .fa-summary-overlay.hidden { display: none; }
-    .fa-summary-dialog { display: flex; flex-direction: column; width: min(99.5vw, 2400px); max-height: 98vh; overflow: hidden; color: var(--fg); background: var(--bg, #0a0d13); border: 1px solid var(--border-soft); box-shadow: 0 1rem 3rem rgba(0,0,0,.5); }
+    .fa-summary-dialog { display: flex; flex-direction: column; width: min(99.5vw, 2400px); max-height: 98vh; overflow: hidden; overscroll-behavior: contain; color: var(--fg); background: var(--bg, #0a0d13); border: 1px solid var(--border-soft); box-shadow: 0 1rem 3rem rgba(0,0,0,.5); }
 
     .fa-summary-header { display: flex; align-items: center; justify-content: space-between; gap: .75rem; padding: .8rem 1rem; border-bottom: 1px solid var(--border-soft); }
     .fa-summary-header h2 { margin: 0; font-size: 1.1rem; }
@@ -571,7 +572,7 @@
     .fa-summary-sync-complete { color: #9be37a; }
     .fa-summary-sync-error { color: #ff8d8d; }
 
-    .fa-summary-table-wrap { overflow: auto; container-type: inline-size; }
+    .fa-summary-table-wrap { overflow: auto; overscroll-behavior: contain; container-type: inline-size; }
     /* Space the explored-result status from the table header without adding
        padding inside the scrollable table itself. */
     .fa-summary-overlay.fa-summary-showing-explored .fa-summary-status { margin-bottom: .5rem; }
@@ -2395,13 +2396,17 @@
   function scheduleRender() { if (!state.panel || state.panel.classList.contains('hidden') || state.refreshingAll || state.renderTimer) return; state.renderTimer = setTimeout(() => { state.renderTimer = null; renderTable(); }, 80); }
   function openPanel() {
     if (!state.panel) return;
+    document.body.classList.add('fa-summary-modal-open');
     state.panel.classList.remove('hidden');
     state.renderedView = null;
     if (state.notificationsReloadTimer) { clearTimeout(state.notificationsReloadTimer); state.notificationsReloadTimer = null; }
     loadNotifications();
     renderTable();
   }
-  function closePanel() { state.panel?.classList.add('hidden'); }
+  function closePanel() {
+    state.panel?.classList.add('hidden');
+    document.body.classList.remove('fa-summary-modal-open');
+  }
 
   async function refreshPlanet(record, allowBulk = false) {
     if (!record.planetId || !window.req || state.refreshing.has(record.planetId) || (state.refreshingAll && !allowBulk)) return [];
