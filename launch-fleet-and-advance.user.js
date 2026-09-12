@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Fonte Antiga - Launch Fleet and Advance
 // @namespace    fa.fleet-launch-next
-// @version      1.3.7
+// @version      1.4.1
 // @description  Add buttons to launch one fleet and to launch as many fleets as possible while advancing destinations
 // @match        *://antiga.hatedabamboo.me/*
 // @grant        none
@@ -21,6 +21,10 @@
     }
     .fa-launch-max-btn {
       position: relative;
+      width: 11rem;
+      min-width: 11rem;
+      box-sizing: border-box;
+      white-space: nowrap;
       overflow: hidden;
     }
     .fa-launch-next-btn:hover,
@@ -304,11 +308,24 @@
       delete button.dataset.cancelled;
       button.closest('.fa-launch-max-wrap')?.classList.remove('fa-launching');
       button.disabled = false;
-      updateMaximumButtonLabel(button);
+      scheduleMaximumButtonLabelUpdate(button, 0);
       // The game's fleet refresh is asynchronous and may update the slot
       // counter shortly after submitDeployFleet() resolves.
-      setTimeout(() => updateMaximumButtonLabel(button), 700);
+      scheduleMaximumButtonLabelUpdate(button, 700);
     }
+  }
+
+  const labelUpdateTimers = new WeakMap();
+
+  function scheduleMaximumButtonLabelUpdate(button, delay = 150) {
+    if (!button) return;
+    const previousTimer = labelUpdateTimers.get(button);
+    if (previousTimer) clearTimeout(previousTimer);
+    const timer = setTimeout(() => {
+      labelUpdateTimers.delete(button);
+      updateMaximumButtonLabel(button);
+    }, delay);
+    labelUpdateTimers.set(button, timer);
   }
 
   async function updateMaximumButtonLabel(button) {
@@ -322,17 +339,19 @@
     button.dataset.requestId = requestId;
     const label = button.querySelector('.fa-launch-max-label');
     if (!label || button.dataset.launching === 'true') return;
-    button.disabled = true;
-    button.title = 'Checking target planets, available ships, and fleet slots…';
-    label.textContent = 'Launch to …';
+    // Keep the current visual state while the debounced check is in flight.
+    // Toggling disabled/label here made overlapping refreshes appear as
+    // disabled → enabled → disabled sequences.
+    button.dataset.rangeUpdating = 'true';
     let positions;
     try {
       positions = await systemPlanetPositions(system);
     } catch (error) {
       if (parseInt(button.dataset.requestId, 10) === requestId) {
-        label.textContent = 'Launch to —';
-        button.disabled = true;
-        button.title = 'Cannot launch: no available target planets, ships, or fleet-command slots.';
+        // A timeout or transient API failure must not strand the button in a
+        // disabled state. Keep the last known state and let a later fleet or
+        // form refresh retry the calculation.
+        delete button.dataset.rangeUpdating;
       }
       return;
     }
@@ -349,6 +368,7 @@
     button.title = canLaunch
       ? 'Launch the selected fleet to every available planet in this displayed range.'
       : reason;
+    delete button.dataset.rangeUpdating;
   }
 
   function installQuickDeployHook() {
@@ -360,7 +380,7 @@
       // refreshDeployForm(), so normal input/change listeners cannot reliably
       // observe the final values. Refresh after the whole operation completes.
       document.querySelectorAll('.fa-launch-max-btn').forEach(button => {
-        setTimeout(() => updateMaximumButtonLabel(button), 250);
+        scheduleMaximumButtonLabelUpdate(button, 250);
       });
       return result;
     };
@@ -410,7 +430,7 @@
       if (labelTimer) clearTimeout(labelTimer);
       labelTimer = setTimeout(() => {
         labelTimer = null;
-        updateMaximumButtonLabel(maxButton);
+        scheduleMaximumButtonLabelUpdate(maxButton);
       }, 150);
     };
     document.getElementById('fleet-dest-system')?.addEventListener('input', updateLabel);
@@ -437,6 +457,8 @@
   }
 
   let timer = null;
+  let rangeUpdateTimer = null;
+
   function mutationTouchesDeployFrame(records) {
     return records.some(record => {
       const target = record.target.nodeType === 1 ? record.target : record.target.parentElement;
@@ -448,13 +470,43 @@
     });
   }
 
+  function mutationTouchesFleetAvailability(records) {
+    return records.some(record => {
+      const target = record.target.nodeType === 1 ? record.target : record.target.parentElement;
+      // Watch only the availability counters. Observing #fleets-container here
+      // can race the game's active-fleet renderer while it replaces its cards.
+      if (target?.closest('#fleets-stat-fcc-slots, #fleet-ship-inputs')) return true;
+      if (record.type !== 'childList') return false;
+      return Array.from(record.addedNodes).some(node =>
+        node.nodeType === 1 && (
+          node.matches('#fleets-stat-fcc-slots, #fleet-ship-inputs') ||
+          node.querySelector('#fleets-stat-fcc-slots, #fleet-ship-inputs')
+        )
+      );
+    });
+  }
+
+  // Fleet completion refreshes the active-fleet list and the ship/slot
+  // counters asynchronously. Debounce this separately from the deploy-frame
+  // installer so a burst of mutations produces one range check, not one
+  // request per DOM mutation.
+  function scheduleRangeButtonUpdate() {
+    if (rangeUpdateTimer) clearTimeout(rangeUpdateTimer);
+    rangeUpdateTimer = setTimeout(() => {
+      rangeUpdateTimer = null;
+      document.querySelectorAll('.fa-launch-max-btn').forEach(button => scheduleMaximumButtonLabelUpdate(button, 0));
+    }, 200);
+  }
+
   function schedule(records) {
-    if (!mutationTouchesDeployFrame(records)) return;
-    if (timer) clearTimeout(timer);
-    timer = setTimeout(() => {
-      timer = null;
-      addLaunchButton();
-    }, 100);
+    if (mutationTouchesDeployFrame(records)) {
+      if (timer) clearTimeout(timer);
+      timer = setTimeout(() => {
+        timer = null;
+        addLaunchButton();
+      }, 100);
+    }
+    if (mutationTouchesFleetAvailability(records)) scheduleRangeButtonUpdate();
   }
 
   const observer = new MutationObserver(schedule);

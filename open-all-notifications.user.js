@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Fonte Antiga - Open All Notifications
 // @namespace    fa.notifications-open-all
-// @version      1.3.1
+// @version      1.4.2
 // @description  Open all notifications and mark them read without changing their appearance until leaving the current view
 // @match        *://antiga.hatedabamboo.me/*
 // @grant        none
@@ -29,6 +29,7 @@
   // while still updating the server as soon as a notification is opened.
   const readRequests = new Map();
   let notificationsWasActive = false;
+  let allNotificationsOpen = false;
 
   function getCardReadInfo(card) {
     const deleteButton = card.querySelector('[data-action="delete"][data-id]');
@@ -110,14 +111,25 @@
     notificationsWasActive = isActive;
   }
 
-  function openAllNotifications() {
+  function toggleAllNotifications() {
     const cards = document.querySelectorAll('#notifications-container .notif-card');
-    cards.forEach(card => {
-      // Send the read request now, but keep the unread appearance until this
-      // page/filter or the Notifications tab is left.
-      requestRead(card);
-      card.classList.add('expanded');
-    });
+    if (allNotificationsOpen) {
+      allNotificationsOpen = false;
+      cards.forEach(card => card.classList.remove('expanded'));
+      // Closing the group is the point where the user has finished reviewing
+      // the current page. Apply successful read results immediately instead of
+      // keeping the unread styling until the Notifications tab is left.
+      finalizeReads();
+    } else {
+      allNotificationsOpen = true;
+      cards.forEach(card => {
+        // Send the read request now, but keep the unread appearance until this
+        // page/filter or the Notifications tab is left.
+        requestRead(card);
+        card.classList.add('expanded');
+      });
+    }
+    updateButton();
   }
 
   function flushBeforeNotificationNavigation(event) {
@@ -125,6 +137,7 @@
       ? event.target.closest('#notif-filter-bar .sub-tab-btn, #notif-pager #notif-prev, #notif-pager #notif-next')
       : null;
     if (!target || target.disabled) return;
+    allNotificationsOpen = false;
     finalizeReads();
   }
 
@@ -137,9 +150,7 @@
       button = document.createElement('button');
       button.type = 'button';
       button.className = 'action-btn fa-expand-unread-btn';
-      button.textContent = 'Open all';
-      button.title = 'Open all notifications shown on this page; mark them read now but keep the unread style until you leave';
-      button.addEventListener('click', openAllNotifications);
+      button.addEventListener('click', toggleAllNotifications);
     }
 
     const readAllButton = document.getElementById('notif-read-all-btn');
@@ -150,7 +161,14 @@
     }
 
     const cards = document.querySelectorAll('#notifications-container .notif-card');
+    if (cards.length === 0) allNotificationsOpen = false;
     button.disabled = cards.length === 0;
+    const text = allNotificationsOpen ? 'Close all' : 'Open all';
+    if (button.textContent !== text) button.textContent = text;
+    const title = allNotificationsOpen
+      ? 'Close all notifications shown on this page'
+      : 'Open all notifications shown on this page; mark them read now but keep the unread style until you leave';
+    if (button.title !== title) button.title = title;
   }
 
   let timer = null;
@@ -173,7 +191,15 @@
     });
     if (!relevant) return;
     updateNotificationTabState();
-    schedule();
+    // Do not wait for the debounce timer once cards are present. The
+    // notifications panel can keep mutating classes while it finishes its
+    // render, repeatedly postponing the timer and leaving Open all disabled.
+    // A card insertion is enough information to enable the button now.
+    if (document.querySelector('#notifications-container .notif-card')) {
+      updateButton();
+    } else {
+      schedule();
+    }
   });
   observer.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ['class'] });
   // Filter and pager buttons are re-rendered by the game, so use delegation.
