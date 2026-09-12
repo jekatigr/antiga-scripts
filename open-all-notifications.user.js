@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Fonte Antiga - Open All Notifications
 // @namespace    fa.notifications-open-all
-// @version      1.4.2
+// @version      1.4.4
 // @description  Open all notifications and mark them read without changing their appearance until leaving the current view
 // @match        *://antiga.hatedabamboo.me/*
 // @grant        none
@@ -107,7 +107,11 @@
     if (!panel) return;
 
     const isActive = panel.classList.contains('active');
-    if (notificationsWasActive && !isActive) finalizeReads();
+    if (notificationsWasActive && !isActive) {
+      allNotificationsOpen = false;
+      finalizeReads();
+      updateButton();
+    }
     notificationsWasActive = isActive;
   }
 
@@ -134,11 +138,12 @@
 
   function flushBeforeNotificationNavigation(event) {
     const target = event.target instanceof Element
-      ? event.target.closest('#notif-filter-bar .sub-tab-btn, #notif-pager #notif-prev, #notif-pager #notif-next')
+      ? event.target.closest('.tab-btn[data-tab="notifications"], #notif-filter-bar .sub-tab-btn, #notif-pager #notif-prev, #notif-pager #notif-next')
       : null;
     if (!target || target.disabled) return;
     allNotificationsOpen = false;
     finalizeReads();
+    updateButton();
   }
 
   function updateButton() {
