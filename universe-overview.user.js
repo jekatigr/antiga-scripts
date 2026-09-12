@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Fonte Antiga - Universe Overview
 // @namespace    fa.universe-overview
-// @version      2.53.3
+// @version      2.54.5
 // @description  Locally summarize colonies with overview, building, ship, and defense inventory tabs
 // @match        *://antiga.hatedabamboo.me/*
 // @grant        none
@@ -527,7 +527,7 @@
     .fa-summary-header { display: flex; align-items: center; justify-content: space-between; gap: .75rem; padding: .8rem 1rem; border-bottom: 1px solid var(--border-soft); }
     .fa-summary-header h2 { margin: 0; font-size: 1.1rem; }
     .fa-summary-close { min-width: 2rem; }
-    .fa-summary-controls { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; padding: .65rem 1rem; background: var(--panel-alt); border-bottom: 1px solid var(--border-soft); }
+    .fa-summary-controls { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; padding: .65rem 1rem 0; background: var(--panel-alt); border-bottom: 1px solid var(--border-soft); }
     .fa-summary-tabs { display: flex; gap: .35rem; width: 100%; padding-bottom: .15rem; }
     .fa-summary-subtabs { padding-top: .05rem; padding-left: 0; }
     .fa-summary-subtabs[hidden] { display: none; }
@@ -535,7 +535,7 @@
     .fa-summary-tab:hover, .fa-summary-tab:focus-visible { opacity: 1; }
     .fa-summary-tab.active { color: var(--fg); border-color: var(--accent); background: var(--panel); opacity: 1; box-shadow: inset 0 -2px 0 var(--accent); }
     .fa-summary-toolbar { display: flex; align-items: center; gap: .5rem; width: 100%; }
-    .fa-summary-update-all { flex: 0 0 auto; white-space: nowrap; }
+    .fa-summary-update-all { flex: 0 0 auto; margin-left: auto; white-space: nowrap; }
     .fa-summary-update-all[hidden] { display: none !important; }
     .fa-summary-bulk-controls { display: flex; flex: 0 0 auto; flex-direction: column; align-items: flex-end; gap: .25rem; min-width: 0; margin-left: auto; }
     .fa-summary-progress { display: flex; flex: 0 1 auto; align-items: center; gap: .4rem; width: 18rem; min-width: 12rem; max-width: 100%; }
@@ -571,7 +571,7 @@
     }
 
     .fa-summary-page-label { min-width: 6rem; text-align: center; color: var(--muted); font-size: .78rem; }
-    .fa-summary-status { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; flex: 1 1 100%; min-height: 1.1em; font-size: .78rem; white-space: pre-line; }
+    .fa-summary-status { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; flex: 1 1 100%; min-height: 0; font-size: .78rem; white-space: pre-line; }
     .fa-summary-status-text { min-width: 0; }
     .fa-summary-status .fa-summary-update-all { flex: 0 0 auto; margin-left: auto; }
     .fa-summary-status .fa-summary-progress { flex: 0 1 18rem; width: 18rem; min-width: 12rem; max-width: 100%; margin-left: 0; }
@@ -601,7 +601,12 @@
     .fa-summary-table .fa-summary-sub { overflow: hidden; text-overflow: ellipsis; }
     .fa-summary-table tbody td { position: relative; min-height: 0; }
     .fa-summary-table tbody td > .fa-summary-time { float: none; flex: none; }
-    .fa-summary-table thead { position: sticky; top: -1px; z-index: 5; box-shadow: 0 1px 0 var(--border-soft), 0 2px 3px rgba(0,0,0,.2); }
+    /* The seam must be part of the header's actual box: paint extending from a
+       table section is layered below scrolling cells in Chromium. The opaque
+       bottom border keeps the header exactly the same height before and after
+       it becomes sticky, while permanently covering the seam. */
+    .fa-summary-table thead { position: sticky; top: 0; z-index: 5; background: var(--bg, #0a0d13); }
+    .fa-summary-table thead th { border-bottom: 6px solid var(--bg, #0a0d13); box-shadow: inset 0 -1px 0 var(--border-soft); }
     .fa-summary-table th { color: var(--muted); background: var(--bg, #0a0d13); white-space: nowrap; cursor: default; }
     .fa-summary-table th.fa-summary-inventory-header { white-space: normal; }
     .fa-summary-table th.fa-summary-inventory-header .fa-summary-filter-head { align-items: flex-end; white-space: normal; }
@@ -610,12 +615,21 @@
     .fa-summary-table tbody tr { background: var(--bg, #0a0d13); }
     .fa-summary-table tbody tr:hover { background: var(--panel-alt) !important; }
     .fa-summary-table tbody tr:hover > td { background: transparent !important; }
-    .fa-summary-table th.fa-summary-planet-sticky { position: sticky; left: 0; z-index: 7; background: var(--bg, #0a0d13); box-shadow: 1px 0 0 var(--border-soft); }
+    .fa-summary-table th.fa-summary-planet-sticky { position: sticky; left: 0; z-index: 7; background: var(--bg, #0a0d13); box-shadow: inset 0 -1px 0 var(--border-soft), 1px 0 0 var(--border-soft); }
     .fa-summary-table td.fa-summary-planet-sticky { position: sticky; left: 0; z-index: 2; background: var(--bg, #0a0d13); box-shadow: 1px 0 0 var(--border-soft); }
     .fa-summary-table tbody tr:hover > td.fa-summary-planet-sticky,
     .fa-summary-table tbody tr.fa-summary-row-expanded > td.fa-summary-planet-sticky { background: var(--panel-alt) !important; }
     .fa-summary-table tbody tr.fa-summary-data-row { cursor: pointer; }
     .fa-summary-table tbody tr.fa-summary-data-row.fa-summary-nonexpandable { cursor: default; }
+    /* The aggregate is a table summary, not another colony row. Its cells
+       deliberately share one solid tint so sticky and scrolling columns look
+       like a single row rather than separate, differently shaded sections. */
+    .fa-summary-table tbody tr.fa-summary-total-row { background: var(--panel-alt); background: rgba(var(--accent-rgb), .16); }
+    .fa-summary-table tbody tr.fa-summary-total-row > td,
+    .fa-summary-table tbody tr.fa-summary-total-row:hover > td { background: var(--panel-alt) !important; background: rgba(var(--accent-rgb), .16) !important; border-top: 1px solid var(--accent); border-bottom: 2px solid var(--accent); }
+    .fa-summary-table tbody tr.fa-summary-total-row > td.fa-summary-planet-sticky,
+    .fa-summary-table tbody tr.fa-summary-total-row:hover > td.fa-summary-planet-sticky { background: var(--panel-alt) !important; background: rgba(var(--accent-rgb), .16) !important; box-shadow: 1px 0 0 var(--border-soft); }
+    .fa-summary-total-label { color: var(--accent); }
     .fa-summary-table tbody tr.fa-summary-data-row.fa-summary-row-expanded { background: var(--panel-alt); }
     .fa-summary-table .fa-summary-name { font-weight: 600; white-space: nowrap; }
     .fa-summary-name-content { display: flex; align-items: center; gap: .4rem; min-width: 0; }
@@ -641,7 +655,7 @@
     .fa-summary-table tbody tr.fa-summary-row-expanded > td.fa-summary-na, .fa-summary-table tbody tr.fa-summary-row-expanded > td.fa-summary-empty,
     .fa-summary-table tbody tr.fa-summary-row-expanded > td:has(> .fa-summary-na), .fa-summary-table tbody tr.fa-summary-row-expanded > td:has(> .fa-summary-empty) { background: transparent !important; opacity: 1; }
     .fa-summary-table tbody tr.fa-summary-row-current > td { background: rgba(var(--accent-rgb), .12) !important; }
-    .fa-summary-table tbody tr.fa-summary-row-current > td.fa-summary-planet-sticky { background: rgba(var(--accent-rgb), .12) !important; box-shadow: inset 3px 0 0 var(--accent), 1px 0 0 var(--border-soft); }
+    .fa-summary-table tbody tr.fa-summary-row-current > td.fa-summary-planet-sticky { background: rgba(var(--accent-rgb), .12) !important; box-shadow: 1px 0 0 var(--border-soft); }
     .fa-summary-table tbody tr.fa-summary-row-current:hover > td { background: var(--panel-alt) !important; }
     .fa-summary-table tbody tr.fa-summary-row-current:hover > td.fa-summary-planet-sticky { background: var(--panel-alt) !important; }
     .fa-summary-table tbody tr.fa-summary-row-current:hover > td.fa-summary-na,
@@ -895,18 +909,25 @@
     window.postMessage({ source: 'fa.universe-overview.galaxy', galaxy, system }, '*');
   }
   function queueTimestampTitle(record) {
-    const labels = [['buildQueue', 'construction'], ['researchQueue', 'research'], ['shipQueue', 'ship'], ['defenseQueue', 'defense']];
+    const labels = [['buildQueue', 'construction'], ['shipQueue', 'ship'], ['defenseQueue', 'defense']];
     const parts = labels.map(([category, label]) => { const timestamp = stampFor(record, category); return timestamp ? `${label}: ${new Date(timestamp).toLocaleString()}` : `${label}: not observed`; });
     return `Oldest queue observation — ${parts.join('; ')}`;
   }
   function queueCell(record, counts, observedAt) {
     const td = document.createElement('td'); td.className = 'fa-summary-queue-cell';
     const values = document.createElement('div'); values.className = 'fa-summary-queue-values';
-    [['B', counts.build], ['R', counts.research], ['S', counts.ships], ['D', counts.defense]].forEach(([label, count]) => {
+    const queueLabels = [['B', 'build', 'Construction'], ['R', 'research', 'Research'], ['S', 'ships', 'Ships'], ['D', 'defense', 'Defense']];
+    queueLabels.forEach(([label, key, description]) => {
+      // Research is player-wide, not colony-specific. Omit it from ordinary
+      // rows; the Total row reports the most recently observed queue instead.
+      if (key === 'research' && !Object.prototype.hasOwnProperty.call(counts, key)) return;
+      const count = counts[key];
       const unknown = count == null;
       const item = document.createElement('span'); item.className = `fa-summary-queue-item${count === 0 ? ' fa-summary-zero' : ''}${unknown ? ' fa-summary-unknown' : ''}`;
       if (count === 0) { item.style.setProperty('color', 'var(--muted)', 'important'); item.style.opacity = '.2'; }
-      item.textContent = `${label}${unknown ? '?' : count}`; item.title = `${label === 'B' ? 'Construction' : label === 'R' ? 'Research' : label === 'S' ? 'Ships' : 'Defense'} queue: ${unknown ? 'not observed' : count}`; values.appendChild(item);
+      item.textContent = `${label}${unknown ? '?' : count}`;
+      item.title = counts[`${key}Title`] || `${description} queue: ${unknown ? 'not observed' : count}`;
+      values.appendChild(item);
     });
     td.appendChild(values);
     appendTimestamp(td, observedAt, queueTimestampTitle(record), record.owned === true);
@@ -1675,7 +1696,7 @@
       const queue = document.createElement('div'); queue.className = 'fa-summary-inventory-queue';
       const count = document.createElement('span');
       const tooltip = queued.perItemSeconds == null ? 'queued' : `queued, ${formatDurationPerItem(queued.perItemSeconds)} per item`;
-      count.textContent = queued.perItemSeconds == null ? `+${fmt(queued.quantity)} queued` : `+${fmt(queued.quantity)}`;
+      count.textContent = `+${fmt(queued.quantity)}`;
       count.title = tooltip; count.setAttribute('aria-label', tooltip);
       queue.appendChild(count);
       queue.title = tooltip; td.appendChild(queue);
@@ -1696,6 +1717,144 @@
     return [
       ['Location', 'coordinates'], ['Planet', 'name'], ['Size', 'sizeTotal'], ['Used size', 'sizeUsed'], ['Resources', 'resources'], ['Production / h', 'production'], ['Storage', 'storage'], ['Capacity', 'capacity'], ['Features', 'features'], ['Buildings', 'buildings'], ['Ships', 'ships'], ['Defenses', 'defenses'], ['Queues', 'queues'],
     ];
+  }
+  function totalValue(records, read) {
+    let total = 0;
+    let known = true;
+    records.forEach(record => {
+      const value = read(record);
+      if (value == null || value === '') known = false;
+      else total += number(value);
+    });
+    return { total, known };
+  }
+  function totalCell(value, className = '') {
+    return cell(value.known ? fmt(value.total) : '?', null, `${className}${value.known ? '' : ' fa-summary-na'}`.trim());
+  }
+  function totalIconCell(rows) {
+    return iconStackedCell(rows.map(([icon, value, prefix = '', suffix = '']) => [icon, value.known ? `${prefix}${fmt(value.total)}${suffix}` : '?']), undefined, rows.some(([, value]) => !value.known) ? 'fa-summary-na' : '');
+  }
+  function latestResearchQueue(records) {
+    let latest = null;
+    records.forEach(record => {
+      const items = valueFor(record, 'researchQueue');
+      const observedAt = stampFor(record, 'researchQueue');
+      if (!Array.isArray(items) || !observedAt) return;
+      if (!latest || timestampMs(observedAt) > timestampMs(latest.observedAt)) latest = { items, observedAt };
+    });
+    return latest;
+  }
+  function researchQueueLabel(items) {
+    if (!items.length) return 'idle';
+    return items.map(item => `${item.tech_name || item.name || item.tech_key || item.key || 'research'}${item.quantity != null ? ` ×${item.quantity}` : item.target_level != null ? ` →${item.target_level}` : ''}`).join(', ');
+  }
+  function totalFeatureCell(records) {
+    const td = document.createElement('td');
+    [['relic', 'Ausente relic', record => latestBase(record).has_relic_building === true], ['stellar', 'Stellar object', record => latestBase(record).has_stellar_object_feature === true]].forEach(([feature, title, matches]) => {
+      const line = document.createElement('span');
+      line.className = `fa-summary-feature-line fa-summary-feature-${feature}`;
+      const icon = summaryIcon(feature === 'stellar' ? 'stellar_object' : 'relic');
+      icon.title = title;
+      line.append(icon, document.createTextNode(String(records.filter(matches).length)));
+      td.appendChild(line);
+    });
+    return td;
+  }
+  function totalInventoryCell(records, spec, catalogItem) {
+    const built = totalValue(records, record => {
+      const items = valueFor(record, spec.dataKey);
+      if (!Array.isArray(items)) return null;
+      const item = items.find(candidate => inventoryItemKey(spec, candidate) === catalogItem.key);
+      return item ? inventoryQuantity(spec, item) : 0;
+    });
+    const queued = totalValue(records, record => {
+      const items = valueFor(record, spec.dataKey);
+      if (!Array.isArray(items)) return null;
+      return queuedInventory(spec, record, catalogItem.key, items.find(candidate => inventoryItemKey(spec, candidate) === catalogItem.key))?.quantity || 0;
+    });
+    const td = totalCell(built);
+    if (queued.known && queued.total) {
+      const queue = document.createElement('div'); queue.className = 'fa-summary-inventory-queue'; queue.textContent = `+${fmt(queued.total)}`;
+      td.appendChild(queue);
+    }
+    return td;
+  }
+  function makeTotalRow(records) {
+    const row = document.createElement('tr');
+    row.className = 'fa-summary-total-row';
+    const base = field => totalValue(records, record => {
+      const value = latestBase(record)[field];
+      return value == null ? null : value;
+    });
+    const resource = field => totalValue(records, record => {
+      const value = latestResources(record)[field];
+      return value == null ? null : value;
+    });
+    const itemCount = category => totalValue(records, record => {
+      const items = valueFor(record, category);
+      return Array.isArray(items) ? items.filter(item => number(item.amount ?? item.quantity) > 0).length : null;
+    });
+    const shipCount = category => totalValue(records, record => {
+      const items = valueFor(record, category);
+      return Array.isArray(items) ? items.reduce((sum, item) => sum + number(item.quantity), 0) : null;
+    });
+    const queueCount = category => totalValue(records, record => {
+      const items = valueFor(record, category);
+      return Array.isArray(items) ? items.length : null;
+    });
+    const baseSizeUsed = totalValue(records, record => {
+      const value = latestBase(record); return value.buildable_space_used ?? value.building_space_used ?? value.used_buildable_space ?? null;
+    });
+    const baseSizeTotal = totalValue(records, record => {
+      const value = latestBase(record); return value.buildable_space ?? value.building_space ?? value.buildable_space_total ?? null;
+    });
+    const cells = {
+      coordinates: cell('Σ'),
+      name: cell(`${records.length} colon${records.length === 1 ? 'y' : 'ies'}`, null, 'fa-summary-total-label'),
+      sizeTotal: totalCell(baseSizeTotal),
+      sizeUsed: cell(baseSizeUsed.known && baseSizeTotal.known ? percent(baseSizeUsed.total, baseSizeTotal.total) : '?', null, baseSizeUsed.known && baseSizeTotal.known ? '' : 'fa-summary-na'),
+      resources: totalIconCell([['metal', resource('metal')], ['silicon', resource('silicon')], ['helium', resource('helium')]]),
+      production: totalIconCell([['metal', resource('rate_metal_per_hour'), '+', '/h'], ['silicon', resource('rate_silicon_per_hour'), '+', '/h'], ['helium', resource('rate_helium_per_hour'), '+', '/h']]),
+      storage: storageCell([
+        { label: 'metal', current: resource('metal').known ? resource('metal').total : null, capacity: resource('capacity_metal').known ? resource('capacity_metal').total : null },
+        { label: 'silicon', current: resource('silicon').known ? resource('silicon').total : null, capacity: resource('capacity_silicon').known ? resource('capacity_silicon').total : null },
+        { label: 'helium', current: resource('helium').known ? resource('helium').total : null, capacity: resource('capacity_helium').known ? resource('capacity_helium').total : null },
+      ]),
+      capacity: capacityCell([
+        { label: 'person', used: base('population_used').known ? base('population_used').total : null, provided: base('population').known ? base('population').total : null },
+        { label: 'automaton', used: base('automatons_used').known ? base('automatons_used').total : null, provided: base('automatons').known ? base('automatons').total : null },
+        { label: 'energy', used: base('energy_used').known ? base('energy_used').total : null, provided: base('energy').known ? base('energy').total : null },
+      ], undefined),
+      features: totalFeatureCell(records),
+      buildings: totalCell(itemCount('buildings')),
+      ships: totalCell(shipCount('ships')),
+      defenses: totalCell(shipCount('defenses')),
+      queues: queueCell({ owned: true }, { build: queueCount('buildQueue').known ? queueCount('buildQueue').total : null, ships: queueCount('shipQueue').known ? queueCount('shipQueue').total : null, defense: queueCount('defenseQueue').known ? queueCount('defenseQueue').total : null }, undefined),
+    };
+    const latestResearch = latestResearchQueue(records);
+    const researchCount = latestResearch ? latestResearch.items.length : null;
+    const researchTitle = latestResearch
+      ? `Latest research queue (${new Date(latestResearch.observedAt).toLocaleString()}): ${researchQueueLabel(latestResearch.items)}`
+      : 'Research queue: not observed';
+    const totalQueues = cells.queues;
+    const totalQueueValues = totalQueues.querySelector('.fa-summary-queue-values');
+    const research = document.createElement('span');
+    research.className = `fa-summary-queue-item${researchCount === 0 ? ' fa-summary-zero' : ''}${researchCount == null ? ' fa-summary-unknown' : ''}`;
+    research.textContent = `R${researchCount == null ? '?' : researchCount}`;
+    research.title = researchTitle;
+    if (researchCount === 0) { research.style.setProperty('color', 'var(--muted)', 'important'); research.style.opacity = '.2'; }
+    totalQueueValues?.appendChild(research);
+    if (state.ownedSubview !== 'overview') {
+      const spec = inventorySpec();
+      inventoryCatalog().forEach(item => { cells[inventoryColumnKey(item.key)] = totalInventoryCell(records, spec, item); });
+    }
+    for (const [, key] of columnsForView()) {
+      const current = cells[key];
+      if (!current) continue;
+      if (key === 'name') current.classList.add('fa-summary-planet-sticky');
+      row.appendChild(current);
+    }
+    return row;
   }
   function makeRow(record, rowNumber) {
     const base = latestBase(record), resourcesData = valueFor(record, 'resources'), resources = resourcesData || {}, notif = recordNotifications(record), occupancy = currentOccupancy(record, notif);
@@ -1778,9 +1937,9 @@
       cells.exploredSurvivors = exploredSurvivorsCell(report, occupancy.value);
     }
     if (state.view === 'owned') {
-      const buildingQueueData = valueFor(record, 'buildQueue'), researchQueueData = valueFor(record, 'researchQueue'), shipQueueData = valueFor(record, 'shipQueue'), defenseQueueData = valueFor(record, 'defenseQueue');
-      const buildingQueue = Array.isArray(buildingQueueData) ? buildingQueueData : [], researchQueue = Array.isArray(researchQueueData) ? researchQueueData : [], shipQueue = Array.isArray(shipQueueData) ? shipQueueData : [], defenseQueue = Array.isArray(defenseQueueData) ? defenseQueueData : [];
-      const queueObservedAt = ['buildQueue', 'researchQueue', 'shipQueue', 'defenseQueue'].map(category => stampFor(record, category)).filter(Boolean).sort()[0] || null;
+      const buildingQueueData = valueFor(record, 'buildQueue'), shipQueueData = valueFor(record, 'shipQueue'), defenseQueueData = valueFor(record, 'defenseQueue');
+      const buildingQueue = Array.isArray(buildingQueueData) ? buildingQueueData : [], shipQueue = Array.isArray(shipQueueData) ? shipQueueData : [], defenseQueue = Array.isArray(defenseQueueData) ? defenseQueueData : [];
+      const queueObservedAt = ['buildQueue', 'shipQueue', 'defenseQueue'].map(category => stampFor(record, category)).filter(Boolean).sort()[0] || null;
       const resourceStamp = observedStamp(record, 'resources');
       cells.resources = iconStackedCell([
         ['metal', fmtMaybe(resources.metal, resourcesKnown)],
@@ -1807,7 +1966,7 @@
       cells.ships = observedCell(record, 'ships', shipsKnown ? (shipsTotal ? fmt(shipsTotal) : '—') : '?');
       cells.defenses = observedCell(record, 'defenses', defensesKnown ? (defensesTotal ? fmt(defensesTotal) : '—') : '?');
       if (shipsKnown && !shipsTotal) cells.ships.classList.add('fa-summary-na');
-      cells.queues = queueCell(record, { build: buildingQueueData == null ? null : buildingQueue.length, research: researchQueueData == null ? null : researchQueue.length, ships: shipQueueData == null ? null : shipQueue.length, defense: defenseQueueData == null ? null : defenseQueue.length }, queueObservedAt);
+      cells.queues = queueCell(record, { build: buildingQueueData == null ? null : buildingQueue.length, ships: shipQueueData == null ? null : shipQueue.length, defense: defenseQueueData == null ? null : defenseQueue.length }, queueObservedAt);
       if (state.ownedSubview !== 'overview') {
         const spec = inventorySpec();
         inventoryCatalog().forEach(item => { cells[inventoryColumnKey(item.key)] = inventoryCell(record, spec, item); });
@@ -2010,21 +2169,35 @@
     const table = state.panel.querySelector('.fa-summary-table');
     if (table) applyColumnWidths(table, viewColumns);
     const colspan = viewColumns.length;
+    if (state.view === 'owned') tbody.appendChild(makeTotalRow(allRecords));
     records.forEach((record, index) => {
       tbody.appendChild(makeRow(record, start + index + 1));
       if (state.view !== 'owned' && state.expanded.has(record.key)) tbody.appendChild(renderDetails(record, colspan));
     });
     const updateAll = state.panel.querySelector('.fa-summary-update-all');
     const progressWrap = state.panel.querySelector('.fa-summary-progress');
+    const toolbar = state.panel.querySelector('.fa-summary-toolbar');
     const status = state.panel.querySelector('.fa-summary-status');
+    // Keep this button attached to the persistent toolbar. Previously it was
+    // moved into the status row for My colonies, then removed when another tab
+    // rendered, so a later return could no longer find or reveal it.
+    if (updateAll && toolbar && !toolbar.contains(updateAll)) {
+      toolbar.appendChild(updateAll);
+    }
     if (status) {
       const shown = allRecords.length ? `${start + 1}–${Math.min(start + effectivePageSize, allRecords.length)}` : '0';
       const rangeText = pageCount > 1 ? ` · showing ${shown}` : '';
-      const statusText = `${allRecords.length} ${state.view === 'owned' ? 'owned' : 'explored'} planet${allRecords.length === 1 ? '' : 's'}${rangeText}${state.lastError ? `\n${state.lastError}` : ''}`;
+      const statusText = `${allRecords.length} explored planet${allRecords.length === 1 ? '' : 's'}${rangeText}${state.lastError ? `\n${state.lastError}` : ''}`;
       status.replaceChildren();
-      const statusLabel = document.createElement('span'); statusLabel.className = 'fa-summary-status-text'; statusLabel.textContent = statusText; status.appendChild(statusLabel);
+      // The colony Total row already identifies the count, so do not repeat
+      // "N owned planets" above the table.
+      if (state.view !== 'owned' || state.lastError) {
+        const statusLabel = document.createElement('span');
+        statusLabel.className = 'fa-summary-status-text';
+        statusLabel.textContent = state.view === 'owned' ? state.lastError : statusText;
+        status.appendChild(statusLabel);
+      }
       if (state.view === 'owned') {
-        if (updateAll) status.appendChild(updateAll);
         if (progressWrap) status.appendChild(progressWrap);
       } else {
         const syncDisplay = notificationSyncDisplay();
@@ -2066,6 +2239,9 @@
         status.appendChild(notificationControls);
       }
     }
+    // Avoid reserving a blank status line beneath the toolbar when neither an
+    // error nor a refresh-progress indicator needs to be displayed.
+    if (status) status.hidden = state.view === 'owned' && !state.lastError && !state.refreshingAll;
     if (updateAll) {
       const bulkInProgress = state.refreshingAll;
       const anotherUpdateInProgress = state.refreshing.size > 0;
@@ -2323,9 +2499,11 @@
       const progressLabel = document.createElement('span'); progressLabel.className = 'fa-summary-progress-label';
       progressWrap.append(progressBar, progressLabel);
       const toolbar = document.createElement('div'); toolbar.className = 'fa-summary-toolbar';
-      toolbar.append(searchWrap, page);
+      // The refresh action belongs with the search and paging controls, not
+      // in the status row that is rebuilt whenever the active tab changes.
+      toolbar.append(searchWrap, page, updateAll);
       const status = document.createElement('div'); status.className = 'fa-summary-status';
-      status.append(updateAll, progressWrap);
+      status.append(progressWrap);
       controls.append(tabs, subTabs, toolbar, status);
       const wrap = document.createElement('div'); wrap.className = 'fa-summary-table-wrap';
       const table = document.createElement('table'); table.className = 'fa-summary-table';
