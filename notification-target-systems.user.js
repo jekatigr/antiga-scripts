@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Fonte Antiga - Notification Target Systems
 // @namespace    fa.notifications-target-systems
-// @version      1.6.6
+// @version      1.6.8
 // @description  Cache notifications locally and mark their target systems on the galaxy map
 // @match        *://antiga.hatedabamboo.me/*
 // @grant        none
@@ -846,19 +846,20 @@
             if (!systems) continue;
             systems.forEach(system => markedSystems.add(system));
           }
-          if (markedSystems.size === 0) return;
-          const color = getComputedStyle(document.documentElement).getPropertyValue('--fa-target-system-color').trim() || '#b7ff00';
-          ctx.save();
-          ctx.fillStyle = color;
-          for (const point of points) {
-            if (!markedSystems.has(Number(point.system))) continue;
-            if (!Number.isFinite(point.px) || !Number.isFinite(point.py)) continue;
-            const radius = RADII[point.size] || RADII.small;
-            ctx.beginPath();
-            ctx.arc(point.px, point.py, radius, 0, Math.PI * 2);
-            ctx.fill();
+          if (markedSystems.size > 0) {
+            const color = getComputedStyle(document.documentElement).getPropertyValue('--fa-target-system-color').trim() || '#b7ff00';
+            ctx.save();
+            ctx.fillStyle = color;
+            for (const point of points) {
+              if (!markedSystems.has(Number(point.system))) continue;
+              if (!Number.isFinite(point.px) || !Number.isFinite(point.py)) continue;
+              const radius = RADII[point.size] || RADII.small;
+              ctx.beginPath();
+              ctx.arc(point.px, point.py, radius, 0, Math.PI * 2);
+              ctx.fill();
+            }
+            ctx.restore();
           }
-          ctx.restore();
         }
         function redraw() {
           // The base map is already painted by the game (or by the

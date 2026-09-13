@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Fonte Antiga - Universe Overview
 // @namespace    fa.universe-overview
-// @version      2.54.17
+// @version      2.54.19
 // @description  Locally summarize colonies with overview, building, ship, and defense inventory tabs
 // @match        *://antiga.hatedabamboo.me/*
 // @grant        none
@@ -517,7 +517,8 @@
     .fa-summary-toolbar { display: flex; align-items: center; gap: .5rem; width: 100%; }
     .fa-summary-update-all { flex: 0 0 auto; margin-left: auto; white-space: nowrap; }
     .fa-summary-update-all[hidden] { display: none !important; }
-    .fa-summary-bulk-controls { display: flex; flex: 0 0 auto; flex-direction: column; align-items: flex-end; gap: .25rem; min-width: 0; margin-left: auto; }
+    .fa-summary-bulk-controls { display: flex; flex: 0 0 auto; align-items: center; gap: .5rem; min-width: 0; margin-left: auto; }
+    .fa-summary-bulk-controls .fa-summary-update-all { margin-left: 0; }
     .fa-summary-progress { display: flex; flex: 0 1 auto; align-items: center; gap: .4rem; width: 18rem; min-width: 12rem; max-width: 100%; }
     .fa-summary-progress[hidden] { display: none !important; }
     .fa-summary-progress-bar { flex: 1 1 auto; width: 8rem; height: .7rem; accent-color: var(--accent); }
@@ -2221,9 +2222,7 @@
         statusLabel.textContent = state.view === 'owned' ? state.lastError : statusText;
         status.appendChild(statusLabel);
       }
-      if (state.view === 'owned') {
-        if (progressWrap) status.appendChild(progressWrap);
-      } else {
+      if (state.view !== 'owned') {
         const syncDisplay = notificationSyncDisplay();
         const notificationControls = document.createElement('div');
         notificationControls.className = 'fa-summary-notification-sync-controls';
@@ -2263,9 +2262,9 @@
         status.appendChild(notificationControls);
       }
     }
-    // Avoid reserving a blank status line beneath the toolbar when neither an
-    // error nor a refresh-progress indicator needs to be displayed.
-    if (status) status.hidden = state.view === 'owned' && !state.lastError && !state.refreshingAll;
+    // Avoid reserving a blank status line beneath the toolbar when no error
+    // needs to be displayed; bulk refresh progress lives in the toolbar.
+    if (status) status.hidden = state.view === 'owned' && !state.lastError;
     if (updateAll) {
       const bulkInProgress = state.refreshingAll;
       const anotherUpdateInProgress = state.refreshing.size > 0;
@@ -2529,12 +2528,13 @@
       const progressBar = document.createElement('progress'); progressBar.className = 'fa-summary-progress-bar'; progressBar.max = 1; progressBar.value = 0; progressBar.setAttribute('aria-label', 'Planet update progress');
       const progressLabel = document.createElement('span'); progressLabel.className = 'fa-summary-progress-label';
       progressWrap.append(progressBar, progressLabel);
+      const bulkControls = document.createElement('div'); bulkControls.className = 'fa-summary-bulk-controls';
+      bulkControls.append(progressWrap, updateAll);
       const toolbar = document.createElement('div'); toolbar.className = 'fa-summary-toolbar';
-      // The refresh action belongs with the search and paging controls, not
-      // in the status row that is rebuilt whenever the active tab changes.
-      toolbar.append(searchWrap, page, updateAll);
+      // Keep the refresh progress beside the action that owns it. The toolbar
+      // is persistent, unlike the status row which is rebuilt per view.
+      toolbar.append(searchWrap, page, bulkControls);
       const status = document.createElement('div'); status.className = 'fa-summary-status';
-      status.append(progressWrap);
       controls.append(tabs, subTabs, toolbar, status);
       const wrap = document.createElement('div'); wrap.className = 'fa-summary-table-wrap';
       const table = document.createElement('table'); table.className = 'fa-summary-table';
@@ -2614,7 +2614,11 @@
       });
       bootstrapObserver.observe(document.body, { childList: true, subtree: true });
     }
-    window.addEventListener('fa-target-system-markers-changed', loadNotifications);
+    // `fa-target-system-markers-changed` only means that the map's visible
+    // filter changed. It is not a notification-cache update; loading the
+    // full cache here freezes the page for players with a large exploration
+    // history. Actual cache changes are handled above via
+    // `fa-notifications-updated` / BroadcastChannel and are coalesced.
     observeDom();
   }
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', start, { once: true });
