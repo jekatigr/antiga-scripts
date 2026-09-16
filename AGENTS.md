@@ -12,8 +12,8 @@ The `sources/` folder is a separate Git repository nested inside this project. I
 - **Resources:** Metal (M), Silicon (S), Helium (H)
 - **Planets:** Player-owned planets with production buildings, storage, shipyards
 - **Planet features:** Ausente relics (`has_relic_building`), stellar objects (`has_stellar_object_feature`, `stellar_object_name`, `stellar_object_description`) — both provide resource income bonuses
-- **Fleet actions:** Explore, Colonize, Attack, Transport, Harvest debris, Expedition, Recover, Relocate
-- **Notifications:** Exploration reports, expedition results, battle results, transport deliveries, harvest results, recovery results, relocation results, incoming attacks
+- **Fleet actions:** Explore, Colonize, Attack, Transport, Harvest debris, Expedition, Recover, Relocate, Warp
+- **Notifications:** Exploration reports, expedition results, battle results, transport deliveries, harvest results, recovery results, relocation and warp results, incoming attacks
 
 ## Architecture
 
@@ -46,7 +46,7 @@ req('DELETE', '/notifications?mission_type=transport')
 | GET | `/planets/:id` | Planet details (name, system, position, distance, temperature, zone, `has_relic_building`, `has_stellar_object_feature`, `stellar_object_name`, `stellar_object_description`) |
 | GET | `/planets/:id/resources` | Current resources, capacities, production rates, income breakdown, and colony pools |
 | GET | `/planets/:id/buildings` | Building levels, effects, workloads, and upgrade metadata |
-| GET | `/planets/:id/build-queue` | Construction queue |
+| GET | `/planets/:id/build-queue` | Construction queue; entries use `building_key`, `building_name`, `target_amount`, and `is_demolition` (each entry represents one level transition) |
 | GET | `/planets/:id/research-queue` | Research queue |
 | GET | `/planets/:id/ship-queue` | Ship construction queue |
 | GET | `/planets/:id/defense-queue` | Defense construction queue |
@@ -67,6 +67,7 @@ req('DELETE', '/notifications?mission_type=transport')
 - `debris_harvested` – harvest result (metal + silicon only, no helium)
 - `debris_wreckers_inbound` – incoming scavenger fleet
 - `relocate_arrived` – fleet relocation
+- `warp_arrived` – one-way warp fleet arrival
 - `recover_gathered` / `recover_lost` – recovered or lost population and automatons
 - `colonize_arrived` – colonization result
 - `abandon_arrived` – colony abandonment result
@@ -141,7 +142,7 @@ On the systems view and planet dashboard, special icons indicate planet features
 | `#dash-planet-stellar-object` | `.pstellar` (dim) | Stellar object detected (`has_stellar_object_feature`). Tooltip: `<name>: <description>` |
 | Systems planet card | `.pdebris` (dim) | Debris field present |
 
-All three share `.pdebris, .prelic, .pstellar` base styles (`inline-flex`, `1.15em`). Icons are filled via `fillIcons()` and use `data-icon="relic"` / `data-icon="stellar_object"`.
+All three share `.pdebris, .prelic, .pstellar` base styles (`inline-flex`, `1.15em`). Icons use `data-icon="relic"` / `data-icon="stellar_object"`. In v0.5.0, the game's icon definitions may include inline SVG in generated markup; `fillIcons()` fills only empty icon slots, so userscripts injecting an empty `data-icon` slot should still call it after insertion.
 
 #### Income Breakdown
 
@@ -174,7 +175,7 @@ These are the actual JavaScript modules loaded by the saved page. Userscripts in
 | `galaxymap_*.js` | Galaxy map visualization |
 | `fleets_*.js` | Fleet deployment, active fleets, and mission dispatch |
 | `trade_*.js` | Interstellar Commerce and trade fleets |
-| `notifications_*.js` | Notifications and game-news feed rendering; v0.3.3 uses combined `body.items` feed entries |
+| `notifications_*.js` | Notifications and game-news feed rendering; v0.3.3+ uses combined `body.items` feed entries and v0.5.0 supports `warp_arrived` / `warp` payloads |
 | `planet_*.js` | Planet dashboard, resources, and queues |
 | `main_*.js` | Page startup, tab switching, and initialization |
 

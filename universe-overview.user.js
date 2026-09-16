@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Fonte Antiga - Universe Overview
 // @namespace    fa.universe-overview
-// @version      2.54.19
+// @version      2.54.25
 // @description  Locally summarize colonies with overview, building, ship, and defense inventory tabs
 // @match        *://antiga.hatedabamboo.me/*
 // @grant        none
@@ -1234,13 +1234,13 @@
     if (value === 'battle_report') return 'battle';
     if (value.includes('transport')) return 'transport';
     if (value.includes('harvest')) return 'harvest';
-    if (value.includes('relocat')) return 'relocation';
+    if (value.includes('relocat') || value === 'warp_arrived') return 'relocation';
     if (value.includes('recover')) return 'recovery';
     if (value.includes('trade')) return 'trade';
     return null;
   }
   function notificationTarget(notification) {
-    const nested = notification?.exploration || notification?.battle || notification?.transport || notification?.relocate || notification?.recover || {};
+    const nested = notification?.exploration || notification?.battle || notification?.transport || notification?.relocate || notification?.warp || notification?.recover || {};
     return {
       planetId: nested.planet_id,
       name: nested.planet_name,
@@ -1429,10 +1429,14 @@
   function stampFor(record, category) { return record.observed?.[category]?.observedAt; }
   function latestBase(record) { return valueFor(record, 'base') || {}; }
   function latestResources(record) { return valueFor(record, 'resources') || latestBase(record); }
-  function sumShips(list) { return (Array.isArray(list) ? list : []).reduce((total, ship) => total + number(ship.quantity), 0); }
+  function sumShips(list) { return (Array.isArray(list) ? list : []).reduce((total, ship) => total + (ship && typeof ship === 'object' ? number(ship.quantity) : 0), 0); }
   function groupShips(list) {
     const groups = {};
-    (Array.isArray(list) ? list : []).forEach(ship => { const group = ship.class || (ship.ship_key || '').split('_')[0] || 'other'; groups[group] = (groups[group] || 0) + number(ship.quantity); });
+    (Array.isArray(list) ? list : []).forEach(ship => {
+      if (!ship || typeof ship !== 'object') return;
+      const group = ship.class || (ship.ship_key || '').split('_')[0] || 'other';
+      groups[group] = (groups[group] || 0) + number(ship.quantity);
+    });
     return Object.entries(groups).map(([key, total]) => `${key} ${fmt(total)}`).join(' · ') || 'none';
   }
   function percent(current, capacity) { return current == null || capacity == null || number(capacity) <= 0 ? '—' : `${Math.min(999, number(current) / number(capacity) * 100).toFixed(0)}%`; }
@@ -1507,28 +1511,29 @@
   }
 
   function buildingLabel(building) {
+    if (!building || typeof building !== 'object') return 'building';
     return `${building.name || building.building_name || building.type || 'building'}${building.amount != null ? `: ${building.amount}` : ''}`;
   }
   function knownBuildings(record, notification) {
     const observedBuildings = valueFor(record, 'buildings');
     if (record.owned === true) {
-      if (Array.isArray(observedBuildings)) return { items: observedBuildings.filter(building => number(building.amount) > 0), observedAt: stampFor(record, 'buildings'), known: true };
+      if (Array.isArray(observedBuildings)) return { items: observedBuildings.filter(building => building && typeof building === 'object' && number(building.amount ?? building.level) > 0), observedAt: stampFor(record, 'buildings'), known: true };
       return { items: [], observedAt: null, known: false };
     }
     const exploration = notification?.exploration;
-    if (exploration && Array.isArray(exploration.buildings)) return { items: exploration.buildings.filter(building => number(building.amount ?? building.level ?? 1) > 0), observedAt: notification.latest.exploration, known: true };
+    if (exploration && Array.isArray(exploration.buildings)) return { items: exploration.buildings.filter(building => building && typeof building === 'object' && number(building.amount ?? building.level ?? 1) > 0), observedAt: notification.latest.exploration, known: true };
     if (exploration || notification?.explorationLost) return { items: [], observedAt: null, known: true };
     return { items: [], observedAt: null, known: false };
   }
   function knownShips(record, notification) {
     const stationed = valueFor(record, 'ships');
     if (record.owned === true) {
-      if (Array.isArray(stationed)) return { items: stationed.filter(ship => number(ship.quantity) > 0), observedAt: stampFor(record, 'ships'), known: true };
+      if (Array.isArray(stationed)) return { items: stationed.filter(ship => ship && typeof ship === 'object' && number(ship.quantity) > 0), observedAt: stampFor(record, 'ships'), known: true };
       return { items: [], observedAt: null, known: false };
     }
     const exploration = notification?.exploration;
     const ships = exploration && Array.isArray(exploration.fleet) ? exploration.fleet : null;
-    if (Array.isArray(ships)) return { items: ships.filter(ship => number(ship.quantity) > 0), observedAt: notification.latest.exploration, known: true };
+    if (Array.isArray(ships)) return { items: ships.filter(ship => ship && typeof ship === 'object' && number(ship.quantity) > 0), observedAt: notification.latest.exploration, known: true };
     if (exploration || notification?.explorationLost) return { items: [], observedAt: null, known: true };
     return { items: [], observedAt: null, known: false };
   }
@@ -1543,7 +1548,7 @@
   function knownDefenses(record, notification) {
     const observed = valueFor(record, 'defenses');
     if (record.owned === true) {
-      if (Array.isArray(observed)) return { items: observed.filter(item => number(item.quantity) > 0), observedAt: stampFor(record, 'defenses'), known: true };
+      if (Array.isArray(observed)) return { items: observed.filter(item => item && typeof item === 'object' && number(item.quantity) > 0), observedAt: stampFor(record, 'defenses'), known: true };
       return { items: [], observedAt: null, known: false };
     }
     const exploration = notification?.exploration;
@@ -1569,6 +1574,13 @@
     items.forEach(item => { const li = document.createElement('li'); li.textContent = item; ul.appendChild(li); });
     return ul;
   }
+  function queueItemSummary(item, category) {
+    if (!item || typeof item !== 'object') return 'item';
+    const name = item.building_name || item.tech_name || item.ship_name || item.ship_key || 'item';
+    if (category === 'buildQueue') return `${name} ${item.is_demolition === true ? '-1' : '+1'}`;
+    const amount = item.quantity ?? item.remaining ?? item.amount ?? item.target_level ?? item.target_amount;
+    return `${name} ×${amount == null ? 1 : amount}`;
+  }
   function renderDetails(record, colspan) {
     const tr = document.createElement('tr'); tr.className = 'fa-summary-detail-row';
     const td = document.createElement('td'); td.colSpan = colspan;
@@ -1584,7 +1596,7 @@
       const defenses = valueFor(record, 'defenses') || [];
       const queues = [
         ['Construction', 'buildQueue'], ['Research', 'researchQueue'], ['Ships queue', 'shipQueue'], ['Defense queue', 'defenseQueue'],
-      ].map(([label, category]) => { const list = valueFor(record, category) || []; return `${label}: ${list.length ? list.map(item => `${item.building_name || item.tech_name || item.ship_name || item.ship_key || 'item'} ×${item.quantity || item.remaining || item.target_level || item.target_amount || 1}`).join(', ') : 'idle'} (${ageShort(stampFor(record, category))})`; });
+      ].map(([label, category]) => { const list = valueFor(record, category) || []; return `${label}: ${list.length ? list.map(item => queueItemSummary(item, category)).join(', ') : 'idle'} (${ageShort(stampFor(record, category))})`; });
       grid.appendChild(detailSection('Economy', `Metal ${fmtMaybe(resources.metal)} / ${fmtMaybe(resources.capacity_metal)} · Silicon ${fmtMaybe(resources.silicon)} / ${fmtMaybe(resources.capacity_silicon)} · Helium ${fmtMaybe(resources.helium)}\nPopulation ${fmtMaybe(base.population_used)} / ${fmtMaybe(base.population)} · Automatons ${fmtMaybe(base.automatons_used)} / ${fmtMaybe(base.automatons)} · Energy ${fmtMaybe(base.energy_used)} / ${fmtMaybe(base.energy)}\nBuildable space ${fmtMaybe(base.buildable_space_used)} / ${fmtMaybe(base.buildable_space)}\nObserved ${ageShort(stampFor(record, 'resources') || stampFor(record, 'base'))}`));
       grid.appendChild(detailSection('Buildings', listElement(buildings.items.map(buildingLabel))));
       grid.appendChild(detailSection('Defenses', listElement(defenses.filter(item => number(item.quantity) > 0).map(item => `${item.name || item.key}: ${fmt(item.quantity)}`))));
@@ -1637,7 +1649,9 @@
 
   function inventoryColumnKey(itemKey) { return `inventory:${itemKey}`; }
   function inventoryItemKey(spec, item) {
-    const key = spec?.itemKey(item);
+    if (!item || typeof item !== 'object' || !spec?.itemKey) return null;
+    let key;
+    try { key = spec.itemKey(item); } catch (_) { return null; }
     return key == null || key === '' ? null : String(key);
   }
   function inventoryCatalog() {
@@ -1655,7 +1669,8 @@
           const key = inventoryItemKey(spec, item);
           if (!key) return;
           if (orderByKey && !orderByKey.has(key)) orderByKey.set(key, orderByKey.size);
-          const label = String(spec.itemName(item));
+          let label;
+          try { label = String(spec.itemName(item)); } catch (_) { return; }
           const current = catalog.get(key);
           if (!current) catalog.set(key, { key, label, order: orderByKey?.get(key) ?? 0 });
           else if (/^(Building|Ship|Defense)$/.test(current.label) && label !== current.label) current.label = label;
@@ -1666,7 +1681,10 @@
     state.renderInventoryCatalog = { subview: state.ownedSubview, items };
     return items;
   }
-  function inventoryQuantity(spec, item) { return Math.max(0, number(spec.quantity(item))); }
+  function inventoryQuantity(spec, item) {
+    if (!item || typeof item !== 'object' || !spec?.quantity) return 0;
+    try { return Math.max(0, number(spec.quantity(item))); } catch (_) { return 0; }
+  }
   function formatDurationPerItem(seconds) {
     const total = Math.max(0, Math.round(number(seconds)));
     const days = Math.floor(total / 86400);
@@ -1684,21 +1702,34 @@
     const queue = valueFor(record, spec.queueKey);
     if (!Array.isArray(queue)) return null;
     const matching = queue.filter(item => {
-      const key = spec.queueKeyFor(item);
+      if (!item || typeof item !== 'object' || !spec?.queueKeyFor) return false;
+      let key;
+      try { key = spec.queueKeyFor(item); } catch (_) { return false; }
       return key != null && String(key) === itemKey;
     });
     if (!matching.length) return null;
-    const quantity = matching.reduce((total, item) => {
+    // Build-queue entries represent one level transition. `target_amount` is
+    // the resulting building level, not the number of levels in that queue
+    // entry, so it must not be used as the displayed queue quantity.
+    const totals = { demolition: 0, construction: 0 };
+    matching.forEach(item => {
       const queued = item.remaining ?? item.quantity ?? item.amount;
-      return total + (queued == null ? 1 : Math.max(0, number(queued)));
-    }, 0);
-    if (quantity <= 0) return null;
+      const quantity = queued == null ? 1 : Math.max(0, number(queued));
+      if (quantity === 0) return;
+      const demolition = spec.queueKey === 'buildQueue' && item.is_demolition === true;
+      totals[demolition ? 'demolition' : 'construction'] += quantity;
+    });
+    const adjustments = [
+      totals.demolition ? { sign: '-', quantity: totals.demolition } : null,
+      totals.construction ? { sign: '+', quantity: totals.construction } : null,
+    ].filter(Boolean);
+    if (!adjustments.length) return null;
     const durationSource = inventoryItem?.next_build_time_seconds
       ?? matching.find(item => item.next_build_time_seconds != null)?.next_build_time_seconds
       ?? matching.find(item => item.build_time_seconds != null)?.build_time_seconds
       ?? matching.find(item => item.duration_seconds != null)?.duration_seconds;
     const perItemSeconds = durationSource == null || number(durationSource) <= 0 ? null : number(durationSource);
-    return { quantity, perItemSeconds };
+    return { adjustments, perItemSeconds };
   }
   function inventoryCell(record, spec, catalogItem) {
     const items = valueFor(record, spec.dataKey);
@@ -1714,7 +1745,7 @@
       const queue = document.createElement('div'); queue.className = 'fa-summary-inventory-queue';
       const count = document.createElement('span');
       const tooltip = queued.perItemSeconds == null ? 'queued' : `queued, ${formatDurationPerItem(queued.perItemSeconds)} per item`;
-      count.textContent = `+${fmt(queued.quantity)}`;
+      count.textContent = queued.adjustments.map(({ sign, quantity }) => `${sign}${fmt(quantity)}`).join(' ');
       count.title = tooltip; count.setAttribute('aria-label', tooltip);
       queue.appendChild(count);
       queue.title = tooltip; td.appendChild(queue);
@@ -1786,14 +1817,23 @@
       const item = items.find(candidate => inventoryItemKey(spec, candidate) === catalogItem.key);
       return item ? inventoryQuantity(spec, item) : 0;
     });
-    const queued = totalValue(records, record => {
+    const queuedTotals = { demolition: 0, construction: 0 };
+    let queuedKnown = true;
+    records.forEach(record => {
       const items = valueFor(record, spec.dataKey);
-      if (!Array.isArray(items)) return null;
-      return queuedInventory(spec, record, catalogItem.key, items.find(candidate => inventoryItemKey(spec, candidate) === catalogItem.key))?.quantity || 0;
+      if (!Array.isArray(items)) { queuedKnown = false; return; }
+      const queued = queuedInventory(spec, record, catalogItem.key, items.find(candidate => inventoryItemKey(spec, candidate) === catalogItem.key));
+      (queued?.adjustments || []).forEach(({ sign, quantity }) => {
+        queuedTotals[sign === '-' ? 'demolition' : 'construction'] += quantity;
+      });
     });
     const td = totalCell(built);
-    if (queued.known && queued.total) {
-      const queue = document.createElement('div'); queue.className = 'fa-summary-inventory-queue'; queue.textContent = `+${fmt(queued.total)}`;
+    const queuedParts = [
+      queuedTotals.demolition ? `-${fmt(queuedTotals.demolition)}` : null,
+      queuedTotals.construction ? `+${fmt(queuedTotals.construction)}` : null,
+    ].filter(Boolean);
+    if (queuedKnown && queuedParts.length) {
+      const queue = document.createElement('div'); queue.className = 'fa-summary-inventory-queue'; queue.textContent = queuedParts.join(' ');
       td.appendChild(queue);
     }
     return td;
