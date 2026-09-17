@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Fonte Antiga - Universe Overview
 // @namespace    fa.universe-overview
-// @version      2.54.25
+// @version      2.54.31
 // @description  Locally summarize colonies with overview, building, ship, and defense inventory tabs
 // @match        *://antiga.hatedabamboo.me/*
 // @grant        none
@@ -552,6 +552,12 @@
     }
 
     .fa-summary-page-label { min-width: 6rem; text-align: center; color: var(--muted); font-size: .78rem; }
+    .fa-summary-page-size { display: inline-flex; align-items: center; gap: .25rem; color: var(--muted); font-size: .78rem; white-space: nowrap; }
+    .fa-summary-page-size select { min-width: 3.5rem; height: 1.8rem; margin: 0; padding: .15rem .35rem; border: 1px solid var(--border-soft); border-radius: .2rem; background: var(--panel, #10151d); color: var(--fg); font: inherit; line-height: 1.2; cursor: pointer; }
+    .fa-summary-page-size select:hover { border-color: var(--accent); }
+    .fa-summary-page-size select:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+    .fa-summary-page-size select option { background: var(--panel, #10151d); color: var(--fg); }
+    .fa-summary-page-size[hidden] { display: none; }
     .fa-summary-status { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; flex: 1 1 100%; min-height: 0; font-size: .78rem; white-space: pre-line; }
     .fa-summary-status-text { min-width: 0; }
     .fa-summary-status .fa-summary-update-all { flex: 0 0 auto; margin-left: auto; }
@@ -794,9 +800,9 @@
     appendTimestamp(td, observedAt);
     return td;
   }
-  function featureCell(features, known) {
-    if (!known) return stackedCell(['?']);
-    if (!features.length) { const td = document.createElement('td'); const value = document.createElement('div'); value.className = 'fa-summary-empty'; value.textContent = '—'; td.appendChild(value); return td; }
+  function featureCell(features, known, unknown = false) {
+    if (!known && !features.length) return stackedCell(['?']);
+    if (!features.length && !unknown) { const td = document.createElement('td'); const value = document.createElement('div'); value.className = 'fa-summary-empty'; value.textContent = '—'; td.appendChild(value); return td; }
     const td = document.createElement('td');
     features.forEach(feature => {
       const key = feature === 'stellar' ? 'stellar_object' : 'relic';
@@ -804,6 +810,13 @@
       const icon = summaryIcon(key); icon.title = feature === 'stellar' ? 'Stellar object' : 'Ausente relic';
       line.appendChild(icon); td.appendChild(line);
     });
+    if (unknown) {
+      const value = document.createElement('span');
+      value.className = 'fa-summary-feature-unknown';
+      value.textContent = '?';
+      value.title = 'One or more feature reports are unavailable';
+      td.appendChild(value);
+    }
     return td;
   }
   function capacityClass(used, provided) {
@@ -1252,7 +1265,7 @@
   function isTradeGuildPlanetName(name) {
     return /galactic\s+trade\s+guild/i.test(String(name || ''));
   }
-  function addNotification(index, notification) {
+  function addNotification(index, notification, includeSystemScan = true) {
     const type = notificationType(notification);
     // Transport deliveries describe resource movement, not planet intelligence.
     // Do not create or enrich explored-planet records from them.
@@ -1279,6 +1292,12 @@
         explorationLostAt: null,
         scanRepelled: false,
         scanRepelledAt: null,
+        // Feature reports are monotonic: a later report may omit a feature,
+        // but it cannot make a previously detected relic disappear.
+        relicKnown: false,
+        relicDetected: false,
+        stellarKnown: false,
+        stellarDetected: false,
       };
       index.set(key, entry);
     }
@@ -1297,11 +1316,42 @@
       entry.scanRepelled = true;
       if (!entry.scanRepelledAt || new Date(entry.scanRepelledAt).getTime() < new Date(date).getTime()) entry.scanRepelledAt = date;
     }
+    if (type === 'exploration' && notification.exploration) {
+      // System-scan planet objects omit relic_detected when the scan did not
+      // identify one. That means unknown, not false. Explicit detections are
+      // retained across later reports because relics cannot disappear.
+      if (Object.prototype.hasOwnProperty.call(notification.exploration, 'relic_detected')) {
+        entry.relicKnown = true;
+        if (notification.exploration.relic_detected === true) entry.relicDetected = true;
+      }
+      if (Object.prototype.hasOwnProperty.call(notification.exploration, 'stellar_object_detected')) {
+        entry.stellarKnown = true;
+        if (notification.exploration.stellar_object_detected === true) entry.stellarDetected = true;
+      }
+    }
     // A destroyed explorer has no scan payload. Keep the newest successful
     // exploration separately so a lost attempt never erases known data.
     if (type === 'exploration' && notification.notification_type === 'exploration' && notification.exploration && (!entry.exploration || new Date(entry.explorationAt || 0).getTime() < new Date(date).getTime())) {
       entry.exploration = notification.exploration;
       entry.explorationAt = date;
+    }
+
+    // A Voyager system scan is one exploration notification containing the
+    // public report for every planet in the destination system. Treat each
+    // scanned planet as its own exploration observation while retaining the
+    // parent notification's galaxy/system coordinates. The recursive call is
+    // disabled for the synthetic notification so malformed/future nested data
+    // cannot expand more than one level.
+    const systemScan = notification.exploration?.system_scan;
+    if (includeSystemScan && type === 'exploration' && Array.isArray(systemScan)) {
+      systemScan.forEach(scannedPlanet => {
+        if (!scannedPlanet || typeof scannedPlanet !== 'object') return;
+        addNotification(index, {
+          ...notification,
+          exploration: scannedPlanet,
+          destination_position: scannedPlanet.position,
+        }, false);
+      });
     }
   }
   async function loadNotifications() {
@@ -1485,13 +1535,20 @@
   function recordFeatures(record, notification) {
     const base = latestBase(record);
     const exploration = notification?.exploration;
-    const known = record.owned === true
-      ? Object.prototype.hasOwnProperty.call(base, 'has_relic_building') || Object.prototype.hasOwnProperty.call(base, 'has_stellar_object_feature')
-      : exploration != null || notification?.explorationLost === true;
-    if (!known) return ['unknown'];
+    if (record.owned === true) {
+      const known = Object.prototype.hasOwnProperty.call(base, 'has_relic_building') || Object.prototype.hasOwnProperty.call(base, 'has_stellar_object_feature');
+      if (!known) return ['unknown'];
+      const features = [];
+      if (base.has_relic_building === true) features.push('relic');
+      if (base.has_stellar_object_feature === true) features.push('stellar');
+      return features.length ? features : ['none'];
+    }
+    if (!exploration) return ['unknown'];
     const features = [];
-    if (base.has_relic_building === true || exploration?.relic_detected === true) features.push('relic');
-    if (base.has_stellar_object_feature === true || exploration?.stellar_object_detected === true) features.push('stellar');
+    if (notification.relicDetected || exploration.relic_detected === true) features.push('relic');
+    if (notification.stellarDetected || exploration.stellar_object_detected === true) features.push('stellar');
+    if (notification.relicKnown !== true && notification.relicDetected !== true) features.push('unknown');
+    if (notification.stellarKnown !== true && notification.stellarDetected !== true) features.push('unknown');
     return features.length ? features : ['none'];
   }
   function matchesFilters(record) {
@@ -1607,7 +1664,11 @@
       grid.appendChild(detailSection('Known fleet', listElement(ships.items.map(item => `${item.ship_name || item.name || item.ship_key || 'ship'}${item.quantity != null ? ` ×${fmt(item.quantity)}` : ''}`))));
       grid.appendChild(detailSection('Known defenses', listElement(exploredDefenses.items.map(item => `${item.ship_name || item.name || item.ship_key || 'defense'}${item.quantity != null ? ` ×${fmt(item.quantity)}` : ''}`))));
     }
-    if (record.owned !== true) grid.appendChild(detailSection('Reported exploration', exploration ? `Occupied: ${exploration.is_occupied ? 'yes' : 'no'}\nTemperature: ${exploration.temperature ?? '—'}°C\nResources: M ${fmtMaybe(exploration.resources?.metal)} · S ${fmtMaybe(exploration.resources?.silicon)} · H ${fmtMaybe(exploration.resources?.helium)}\nDebris: M ${fmtMaybe(exploration.debris?.metal)} · S ${fmtMaybe(exploration.debris?.silicon)} · H ${fmtMaybe(exploration.debris?.helium)}\nRelic: ${exploration.relic_detected ? 'yes' : 'no'} · Stellar object: ${exploration.stellar_object_detected ? 'yes' : 'no'}` : '—'));
+    if (record.owned !== true) {
+      const relic = notif?.relicDetected === true ? 'yes' : Object.prototype.hasOwnProperty.call(exploration || {}, 'relic_detected') ? (exploration.relic_detected ? 'yes' : 'no') : '?';
+      const stellar = notif?.stellarDetected === true ? 'yes' : Object.prototype.hasOwnProperty.call(exploration || {}, 'stellar_object_detected') ? (exploration.stellar_object_detected ? 'yes' : 'no') : '?';
+      grid.appendChild(detailSection('Reported exploration', exploration ? `Occupied: ${exploration.is_occupied ? 'yes' : 'no'}\nTemperature: ${exploration.temperature ?? '—'}°C\nResources: M ${fmtMaybe(exploration.resources?.metal)} · S ${fmtMaybe(exploration.resources?.silicon)} · H ${fmtMaybe(exploration.resources?.helium)}\nDebris: M ${fmtMaybe(exploration.debris?.metal)} · S ${fmtMaybe(exploration.debris?.silicon)} · H ${fmtMaybe(exploration.debris?.helium)}\nRelic: ${relic} · Stellar object: ${stellar}` : '—'));
+    }
     if (record.owned === true) {
     }
     td.appendChild(grid); tr.appendChild(td); return tr;
@@ -1970,9 +2031,15 @@
     const usedSize = sizeSource.buildable_space_used ?? sizeSource.building_space_used ?? sizeSource.used_buildable_space;
     const totalSize = sizeSource.buildable_space ?? sizeSource.building_space ?? sizeSource.buildable_space_total;
     const featureParts = [];
-    if (base.has_relic_building === true || displayNotif?.exploration?.relic_detected === true) featureParts.push('relic');
-    if (base.has_stellar_object_feature === true || displayNotif?.exploration?.stellar_object_detected === true) featureParts.push('stellar');
-    const featuresKnown = record.owned === true ? baseKnown : displayNotif?.exploration != null || displayNotif?.explorationLost === true;
+    if (base.has_relic_building === true || displayNotif?.relicDetected === true || displayNotif?.exploration?.relic_detected === true) featureParts.push('relic');
+    if (base.has_stellar_object_feature === true || displayNotif?.stellarDetected === true || displayNotif?.exploration?.stellar_object_detected === true) featureParts.push('stellar');
+    const featuresKnown = record.owned === true
+      ? baseKnown
+      : displayNotif?.exploration != null && displayNotif.relicKnown === true && displayNotif.stellarKnown === true;
+    const featuresUnknown = record.owned !== true && displayNotif?.exploration != null && (
+      (displayNotif.relicKnown !== true && displayNotif.relicDetected !== true)
+      || (displayNotif.stellarKnown !== true && displayNotif.stellarDetected !== true)
+    );
     const cells = {
       number: cell(rowNumber, null),
       name: cell(name, null, 'fa-summary-name', record.owned === true ? economyTimestamp(record) : undefined, record.owned === true ? economyTimestampTitle(record, economyTimestamp(record)) : undefined, record.owned === true),
@@ -1981,7 +2048,7 @@
       sizeUsed: cell(sizeKnown ? percent(usedSize, totalSize) : '?', null, usedSize == null || totalSize == null ? 'fa-summary-na' : ''),
       sizeTotal: cell(fmtMaybe(totalSize, sizeKnown), null, totalSize == null ? 'fa-summary-na' : ''),
       status: statusCell(record.owned === true ? 'Owned by me' : occupancy.value, undefined, null),
-      features: featureCell(featureParts, featuresKnown),
+      features: featureCell(featureParts, featuresKnown, featuresUnknown),
       buildings: knownBuildingsCell(record, displayNotif),
       knownFleet: knownFleetCell(record, displayNotif),
       knownDefense: knownDefenseCell(record, displayNotif),
@@ -2225,7 +2292,7 @@
     // for the second record pass when a search is actually active.
     const summaryRecords = state.view === 'owned' && state.search.trim() ? matchingRecords(false) : allRecords;
     const paginationEnabled = state.view !== 'owned' || allRecords.length >= 100;
-    const effectivePageSize = paginationEnabled ? (state.view === 'explored' ? 25 : state.pageSize) : Math.max(1, allRecords.length);
+    const effectivePageSize = paginationEnabled ? state.pageSize : Math.max(1, allRecords.length);
     const pageCount = Math.max(1, Math.ceil(allRecords.length / effectivePageSize));
     state.page = paginationEnabled ? Math.min(state.page, pageCount - 1) : 0;
     const start = state.page * effectivePageSize;
@@ -2316,10 +2383,14 @@
     }
     updateRefreshProgressUi();
     const pageControl = state.panel.querySelector('.fa-summary-page');
+    const pageSizeControl = state.panel.querySelector('.fa-summary-page-size');
+    const pageSizeSelect = state.panel.querySelector('.fa-summary-page-size-select');
     const pageLabel = state.panel.querySelector('.fa-summary-page-label');
     const previous = state.panel.querySelector('.fa-summary-page-prev');
     const next = state.panel.querySelector('.fa-summary-page-next');
     if (pageControl) pageControl.hidden = !paginationEnabled || pageCount <= 1;
+    if (pageSizeControl) pageSizeControl.hidden = state.view !== 'explored';
+    if (pageSizeSelect) pageSizeSelect.value = String(state.pageSize);
     if (pageLabel) pageLabel.textContent = `Page ${state.page + 1} / ${pageCount}`;
     if (previous) previous.disabled = state.page === 0;
     if (next) next.disabled = state.page >= pageCount - 1;
@@ -2371,7 +2442,7 @@
     if (columnKey === 'status') return state.view === 'explored'
       ? [['Occupied', 'Occupied'], ['Unoccupied', 'Unoccupied']]
       : [['Owned', 'Owned'], ['Occupied', 'Occupied'], ['Unoccupied', 'Unoccupied']];
-    if (columnKey === 'features') return [['relic', 'Relic'], ['stellar', 'Stellar'], ['both', 'Both relic + stellar'], ['none', 'None']];
+    if (columnKey === 'features') return [['relic', 'Relic'], ['stellar', 'Stellar'], ['both', 'Both relic + stellar'], ['none', 'None'], ['unknown', 'Unknown']];
     return [];
   }
   function filterSetFor(columnKey) { return columnKey === 'status' ? state.statusFilters : state.featureFilters; }
@@ -2563,6 +2634,12 @@
       const pageLabel = document.createElement('span'); pageLabel.className = 'fa-summary-page-label';
       const next = document.createElement('button'); next.type = 'button'; next.className = 'fa-summary-page-next'; next.textContent = '→'; next.title = 'Next page'; next.addEventListener('click', () => { state.page += 1; renderTable(); });
       page.append(previous, pageLabel, next);
+      const pageSizeControl = document.createElement('label'); pageSizeControl.className = 'fa-summary-page-size'; pageSizeControl.textContent = 'Per page';
+      const pageSizeSelect = document.createElement('select'); pageSizeSelect.className = 'fa-summary-page-size-select'; pageSizeSelect.setAttribute('aria-label', 'Explored planets per page');
+      [10, 20, 50, 100, 500, 1000].forEach(size => { const option = document.createElement('option'); option.value = String(size); option.textContent = String(size); pageSizeSelect.appendChild(option); });
+      pageSizeSelect.value = String(state.pageSize);
+      pageSizeSelect.addEventListener('change', () => { state.pageSize = Number(pageSizeSelect.value); state.page = 0; renderTable(); });
+      pageSizeControl.appendChild(pageSizeSelect);
       const updateAll = document.createElement('button'); updateAll.type = 'button'; updateAll.className = 'fa-summary-update-all'; updateAll.textContent = 'Refresh all colonies'; updateAll.title = 'Refresh all owned colonies one by one'; updateAll.addEventListener('click', refreshAllOwned);
       const progressWrap = document.createElement('div'); progressWrap.className = 'fa-summary-progress'; progressWrap.hidden = true;
       const progressBar = document.createElement('progress'); progressBar.className = 'fa-summary-progress-bar'; progressBar.max = 1; progressBar.value = 0; progressBar.setAttribute('aria-label', 'Planet update progress');
@@ -2573,7 +2650,7 @@
       const toolbar = document.createElement('div'); toolbar.className = 'fa-summary-toolbar';
       // Keep the refresh progress beside the action that owns it. The toolbar
       // is persistent, unlike the status row which is rebuilt per view.
-      toolbar.append(searchWrap, page, bulkControls);
+      toolbar.append(searchWrap, page, pageSizeControl, bulkControls);
       const status = document.createElement('div'); status.className = 'fa-summary-status';
       controls.append(tabs, subTabs, toolbar, status);
       const wrap = document.createElement('div'); wrap.className = 'fa-summary-table-wrap';

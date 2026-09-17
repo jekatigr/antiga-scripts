@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Fonte Antiga - Notification Target Systems
 // @namespace    fa.notifications-target-systems
-// @version      1.6.8
+// @version      1.6.11
 // @description  Cache notifications locally and mark their target systems on the galaxy map
 // @match        *://antiga.hatedabamboo.me/*
 // @grant        none
@@ -13,7 +13,7 @@
 
   const TYPES_STORAGE_KEY = 'fa.target-system-types';
   const MAP_CHANGED_EVENT = 'fa-target-system-markers-changed';
-  const MARKS_CACHE_KEY = 'fa.target-system-marks-cache-v2';
+  const MARKS_CACHE_KEY = 'fa.target-system-marks-cache-v3';
   // This is a shared contract for companion userscripts. The notifications
   // store contains the complete raw notification object from /notifications
   // (unwrapped from the combined feed on v0.3.3+).
@@ -27,7 +27,8 @@
   const FILTER_ICON_HTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 5h18l-7 8v5l-4 2v-7L3 5z" fill="currentColor"></path></svg>';
 
   const NOTIFICATION_TYPES = [
-    { key: 'exploration', label: 'Exploration' },
+    { key: 'exploration', label: 'Planet exploration' },
+    { key: 'system_exploration', label: 'System exploration' },
     { key: 'expedition', label: 'Expedition' },
     { key: 'occupied', label: 'Occupied' },
     { key: 'attack', label: 'Attack' },
@@ -534,7 +535,15 @@
   function loadSelectedTypes() {
     const value = readStorage(TYPES_STORAGE_KEY, null);
     if (!Array.isArray(value)) return new Set(ALL_TYPE_KEYS);
-    return new Set(value.filter(type => TYPE_KEYS.has(type)));
+    const selected = new Set(value.filter(type => TYPE_KEYS.has(type)));
+    // Preserve the previous Exploration selection when upgrading to the
+    // split Planet/System exploration filters. Persist the migration so the
+    // page-context map hook does not have to infer user preferences repeatedly.
+    if (selected.has('exploration') && !selected.has('system_exploration')) {
+      selected.add('system_exploration');
+      saveStorage(TYPES_STORAGE_KEY, Array.from(selected));
+    }
+    return selected;
   }
 
   let selectedTypes = loadSelectedTypes();
@@ -650,7 +659,7 @@
         const DB_NAME = 'fa.notifications';
         const DB_VERSION = 1;
         const STORE_NAME = 'notifications';
-        const TYPES = new Set(${JSON.stringify(['exploration', 'expedition', 'occupied', 'attack', 'transport', 'harvest', 'trade', 'other'])});
+        const TYPES = new Set(${JSON.stringify(['exploration', 'system_exploration', 'expedition', 'occupied', 'attack', 'transport', 'harvest', 'trade', 'other'])});
         const EVENT_NAME = 'fa-target-system-markers-changed';
         const RADII = { small: 2.6, mid: 3.4, large: 4.4 };
         let targetMarks = [];
@@ -672,7 +681,7 @@
           const missionType = String(notification && notification.mission_type || '').toLowerCase();
           if (notificationType === 'expedition_lost') return null;
           if (notificationType === 'expedition_returned' || (missionType === 'expedition' && notificationType !== 'expedition_lost')) return 'expedition';
-          if (notificationType === 'exploration' || missionType === 'explore') return 'exploration';
+          if (notificationType === 'exploration' || missionType === 'explore') return Array.isArray(notification?.exploration?.system_scan) ? 'system_exploration' : 'exploration';
           if (notificationType.includes('attack') || notificationType.includes('battle') || notificationType === 'planet_scanned' || missionType === 'attack') return 'attack';
           if (notificationType.includes('harvest') || missionType === 'harvest') return 'harvest';
           if (notificationType.includes('trade') || missionType === 'trade') return 'trade';
@@ -739,6 +748,7 @@
             const types = [type];
             const occupied = notification && (
               notification.exploration?.is_occupied === true
+              || notification.exploration?.system_scan?.some(planet => planet?.is_occupied === true)
               || notification.notification_type === 'exploration_lost'
               || notification.notification_type === 'planet_scanned'
               || notification.notification_type === 'attack_incoming'
@@ -785,7 +795,8 @@
         function readSelectedTypes() {
           try {
             const value = JSON.parse(localStorage.getItem('${TYPES_STORAGE_KEY}') || 'null');
-            return new Set(Array.isArray(value) ? value.filter(type => TYPES.has(type)) : Array.from(TYPES));
+            if (!Array.isArray(value)) return new Set(TYPES);
+            return new Set(value.filter(type => TYPES.has(type)));
           } catch (_) {
             return new Set(TYPES);
           }
