@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Fonte Antiga - Universe Overview
 // @namespace    fa.universe-overview
-// @version      2.54.31
+// @version      2.54.34
 // @description  Locally summarize colonies with overview, building, ship, and defense inventory tabs
 // @match        *://antiga.hatedabamboo.me/*
 // @grant        none
@@ -1526,10 +1526,24 @@
   function currentOccupancy(record, notification) {
     const base = latestBase(record);
     if (record.owned === true) return { value: 'Owned', date: stampFor(record, 'base') };
+    const explorationAt = notification?.explorationAt;
+    const lostAt = notification?.explorationLostAt || notification?.scanRepelledAt;
+    // A failed exploration is an occupied signal, but it must not override a
+    // later successful report. This matters when a planet was occupied in the
+    // past, then abandoned and successfully explored afterward.
+    const successfulExploration = notification?.exploration
+      && typeof notification.exploration.is_occupied === 'boolean'
+      && (!lostAt || !explorationAt || new Date(explorationAt).getTime() >= new Date(lostAt).getTime());
+    // Once the live sidebar no longer identifies this as owned, an old
+    // private `/planets/:id` snapshot must not keep the abandoned planet
+    // marked Occupied. The exploration report is the applicable public state.
+    if (record.owned !== true && successfulExploration) {
+      return { value: notification.exploration.is_occupied ? 'Occupied' : 'Unoccupied', date: explorationAt };
+    }
     if (notification?.explorationLost || notification?.scanRepelled) return { value: 'Occupied', date: null };
     if (base.claimed === true) return { value: 'Occupied', date: stampFor(record, 'base') };
     if (base.claimed === false) return { value: 'Unoccupied', date: stampFor(record, 'base') };
-    if (notification?.exploration && typeof notification.exploration.is_occupied === 'boolean') return { value: notification.exploration.is_occupied ? 'Occupied' : 'Unoccupied', date: null };
+    if (notification?.exploration && typeof notification.exploration.is_occupied === 'boolean') return { value: notification.exploration.is_occupied ? 'Occupied' : 'Unoccupied', date: explorationAt };
     return { value: '?', date: null };
   }
   function recordFeatures(record, notification) {
