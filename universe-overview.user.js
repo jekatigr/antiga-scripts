@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Fonte Antiga - Universe Overview
 // @namespace    fa.universe-overview
-// @version      2.54.34
+// @version      2.54.36
 // @description  Locally summarize colonies with overview, building, ship, and defense inventory tabs
 // @match        *://antiga.hatedabamboo.me/*
 // @grant        none
@@ -691,6 +691,7 @@
     .fa-summary-feature-line .fa-summary-inline-icon { width: 1.35em; height: 1.35em; margin-right: 0; }
     .fa-summary-feature-relic { color: var(--gold, #d6ad55); }
     .fa-summary-feature-stellar { color: var(--fg-dim, var(--muted)); }
+    .fa-summary-stellar-forge-state { display: inline-block; margin-left: .25em; font-size: .85em; line-height: 1; vertical-align: .05em; }
     .fa-summary-over { color: #ff8d8d !important; }
     .fa-summary-under { color: #ffcc66 !important; }
     .fa-summary-full { color: #ff8d8d !important; }
@@ -1760,6 +1761,15 @@
     if (!item || typeof item !== 'object' || !spec?.quantity) return 0;
     try { return Math.max(0, number(spec.quantity(item))); } catch (_) { return 0; }
   }
+  function stellarForgeState(item, spec) {
+    if (state.ownedSubview !== 'buildings' || !item || typeof item !== 'object' || spec?.dataKey !== 'buildings') return null;
+    const key = String(item.type ?? item.building_key ?? item.key ?? '');
+    if (key !== 'megastructure_stellar_forge') return null;
+    if (inventoryQuantity(spec, item) <= 0) return null;
+    return item.stellar_forge_active === true
+      ? { icon: '🟢', label: 'Stellar Forge active' }
+      : null;
+  }
   function formatDurationPerItem(seconds) {
     const total = Math.max(0, Math.round(number(seconds)));
     const days = Math.floor(total / 86400);
@@ -1815,6 +1825,15 @@
     const td = document.createElement('td'); td.className = 'fa-summary-inventory-cell';
     const value = document.createElement('div'); value.className = 'fa-summary-inventory-value'; value.textContent = primary;
     if (primary === '—') value.classList.add('fa-summary-na');
+    const forgeState = stellarForgeState(item, spec);
+    if (forgeState) {
+      const indicator = document.createElement('span');
+      indicator.className = 'fa-summary-stellar-forge-state';
+      indicator.textContent = forgeState.icon;
+      indicator.title = forgeState.label;
+      indicator.setAttribute('aria-label', forgeState.label);
+      value.appendChild(indicator);
+    }
     td.appendChild(value);
     if (queued) {
       const queue = document.createElement('div'); queue.className = 'fa-summary-inventory-queue';
