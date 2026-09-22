@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Fonte Antiga - Notification Target Systems
 // @namespace    fa.notifications-target-systems
-// @version      1.6.14
+// @version      1.6.15
 // @description  Cache notifications locally and mark their target systems on the galaxy map
 // @match        *://fonteantiga.com/*
 // @grant        none
@@ -34,7 +34,6 @@
     { key: 'attack', label: 'Attack' },
     { key: 'transport', label: 'Transport' },
     { key: 'harvest', label: 'Harvest' },
-    { key: 'trade', label: 'Trade' },
     { key: 'other', label: 'Other' },
   ];
   const TYPE_KEYS = new Set(NOTIFICATION_TYPES.map(type => type.key));
@@ -485,8 +484,13 @@
       display: block;
     }
     .fa-target-filter > summary {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      box-sizing: border-box;
       width: 2rem;
-      padding: 0.3rem 0;
+      height: 2rem;
+      padding: 0;
       margin: 0;
       cursor: pointer;
       list-style: none;
@@ -707,7 +711,7 @@
         const DB_NAME = 'fa.notifications';
         const DB_VERSION = 1;
         const STORE_NAME = 'notifications';
-        const TYPES = new Set(${JSON.stringify(['exploration', 'system_exploration', 'expedition', 'occupied', 'attack', 'transport', 'harvest', 'trade', 'other'])});
+        const TYPES = new Set(${JSON.stringify(['exploration', 'system_exploration', 'expedition', 'occupied', 'attack', 'transport', 'harvest', 'other'])});
         const EVENT_NAME = 'fa-target-system-markers-changed';
         const RADII = { small: 2.6, mid: 3.4, large: 4.4 };
         let targetMarks = [];
@@ -732,7 +736,7 @@
           if (notificationType === 'exploration' || missionType === 'explore') return Array.isArray(notification?.exploration?.system_scan) ? 'system_exploration' : 'exploration';
           if (notificationType.includes('attack') || notificationType.includes('battle') || notificationType === 'planet_scanned' || missionType === 'attack') return 'attack';
           if (notificationType.includes('harvest') || missionType === 'harvest') return 'harvest';
-          if (notificationType.includes('trade') || missionType === 'trade') return 'trade';
+          if (notificationType.includes('trade') || missionType === 'trade') return 'other';
           if (notificationType.includes('transport') || missionType === 'transport') return 'transport';
           return 'other';
         }

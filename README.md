@@ -42,10 +42,7 @@ Shows a **Σ total** beside resource amounts in exploration reports, battle resu
 Makes large resource values easier to read by separating thousands. For example, `100000/7654321` becomes `100 000/7 654 321`.
 
 ### [Notification Target Systems](https://github.com/jekatigr/antiga-scripts/blob/master/notification-target-systems.user.js)
-Highlights relevant systems directly on the Galaxy map based on your notification history. Use separate filters for Planet exploration and System exploration, plus Expedition, Occupied, Attack, Transport, Harvest, Trade, and Other.
-
-### [Full-Width Galaxy Map](https://github.com/jekatigr/antiga-scripts/blob/master/full-width-galaxy-map.user.js)
-Expands the Galaxy map to use the available width of the map frame, giving you more room to view distant systems while keeping the normal map height and system markers.
+Highlights relevant systems directly on the Galaxy map based on your notification history. Use separate filters for Planet exploration and System exploration, plus Expedition, Occupied, Attack, Transport, Harvest, and Other; Trade notifications are included under Other.
 
 ### [Explore From Nearest Colony](https://github.com/jekatigr/antiga-scripts/blob/master/explore-from-nearest-colony.user.js)
 When you choose **Explore** in the Galaxy tab, opens the closest colony first so the fleet launches from a nearby location and uses less travel time.
