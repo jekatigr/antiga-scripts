@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Fonte Antiga - Launch Fleet and Advance
 // @namespace    fa.fleet-launch-next
-// @version      1.4.1
-// @description  Add buttons to launch one fleet and to launch as many fleets as possible while advancing destinations
+// @version      1.4.2
+// @description  Add a range launch button to send the selected fleet to multiple destinations
 // @match        *://antiga.hatedabamboo.me/*
 // @grant        none
 // @run-at       document-end
@@ -13,7 +13,6 @@
 
   const style = document.createElement('style');
   style.textContent = `
-    .fa-launch-next-btn,
     .fa-launch-max-btn {
       background: var(--panel-alt);
       color: var(--fg);
@@ -27,7 +26,6 @@
       white-space: nowrap;
       overflow: hidden;
     }
-    .fa-launch-next-btn:hover,
     .fa-launch-max-btn:hover {
       background: var(--panel);
       border-color: var(--accent);
@@ -133,18 +131,6 @@
     input.dispatchEvent(new Event('input', { bubbles: true }));
   }
 
-  async function advanceDestinationPlanet() {
-    const systemInput = document.getElementById('fleet-dest-system');
-    const positionInput = document.getElementById('fleet-dest-position');
-    const system = parseInt(systemInput?.value, 10);
-    const current = parseInt(positionInput?.value, 10);
-    if (!system || !current) return;
-
-    const positions = await systemPlanetPositions(system);
-    const next = positions.find(position => position > current);
-    if (next != null) setDestinationPosition(next);
-  }
-
   async function launchFleet() {
     // The current game validates in reviewDeployFleet() and submits through a
     // separate async helper. Capture that helper's result because the review
@@ -165,17 +151,6 @@
       return (await submission) === true;
     } finally {
       if (window.submitDeployFleet === wrappedSubmit) window.submitDeployFleet = originalSubmit;
-    }
-  }
-
-  async function launchAndAdvance(button) {
-    if (button.disabled || typeof window.reviewDeployFleet !== 'function') return;
-
-    button.disabled = true;
-    try {
-      if (await launchFleet()) await advanceDestinationPlanet();
-    } finally {
-      button.disabled = false;
     }
   }
 
@@ -290,9 +265,8 @@
       // button itself stays disabled.
       setLaunchProgress(button, 0, count);
 
-      // Reuse the same path as the normal +1 button. This keeps validation,
-      // confirmation, resource refreshes, and all other game-side UI behavior
-      // in the game's own review/submit flow rather than duplicating it here.
+      // Reuse the game's review/submit flow so validation, confirmation,
+      // resource refreshes, and all other game-side UI behavior stay native.
       for (let i = 0; i < count; i += 1) {
         if (button.dataset.cancelled === 'true') break;
         if (i > 0) await wait(1000);
@@ -391,15 +365,8 @@
   function addLaunchButton() {
     installQuickDeployHook();
     const footer = document.querySelector('#deploy-fleet-frame .deploy-fleet-footer');
-    const launchButton = footer && footer.querySelector('.deploy-launch-btn:not(.fa-launch-next-btn):not(.fa-launch-max-btn)');
-    if (!launchButton || footer.querySelector('.fa-launch-next-btn')) return;
-
-    const button = document.createElement('button');
-    button.type = 'button';
-    button.className = 'deploy-launch-btn fa-launch-next-btn';
-    button.textContent = 'Launch Fleet +1';
-    button.title = 'Launch this fleet, then advance to the next planet';
-    button.addEventListener('click', () => launchAndAdvance(button));
+    const launchButton = footer && footer.querySelector('.deploy-launch-btn:not(.fa-launch-max-btn)');
+    if (!launchButton || footer.querySelector('.fa-launch-max-btn')) return;
 
     const maxButton = document.createElement('button');
     maxButton.type = 'button';
@@ -424,7 +391,6 @@
     maxWrap.append(maxButton, cancelButton);
     if (typeof window.fillIcons === 'function') window.fillIcons(cancelButton);
 
-    launchButton.insertAdjacentElement('afterend', button);
     let labelTimer = null;
     const updateLabel = () => {
       if (labelTimer) clearTimeout(labelTimer);
@@ -452,7 +418,7 @@
       setTimeout(updateLabel, 0);
     });
     updateLabel();
-    button.insertAdjacentElement('afterend', maxWrap);
+    launchButton.insertAdjacentElement('afterend', maxWrap);
 
   }
 
