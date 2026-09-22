@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Fonte Antiga - Notification Target Systems
 // @namespace    fa.notifications-target-systems
-// @version      1.6.15
+// @version      1.6.16
 // @description  Cache notifications locally and mark their target systems on the galaxy map
 // @match        *://fonteantiga.com/*
 // @grant        none
@@ -686,6 +686,13 @@
     return details;
   }
 
+  function matchFilterButtonHeight(mapControls) {
+    const summary = mapControls.querySelector('.fa-target-filter-summary');
+    const control = mapControls.querySelector('.nav-arrow');
+    const height = control?.getBoundingClientRect().height;
+    if (summary && Number.isFinite(height) && height > 0) summary.style.height = `${height}px`;
+  }
+
   function ensureMapControls() {
     const frame = document.getElementById('galaxy-map-frame');
     const mapControls = frame && frame.querySelector('.galaxy-map-controls');
@@ -700,6 +707,7 @@
       mapControls.appendChild(createFilterControls());
     }
 
+    matchFilterButtonHeight(mapControls);
     syncFilterControls();
   }
 
