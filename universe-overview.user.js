@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Fonte Antiga - Universe Overview
 // @namespace    fa.universe-overview
-// @version      2.54.40
+// @version      2.54.41
 // @description  Locally summarize colonies with overview, building, ship, and defense inventory tabs
 // @match        *://fonteantiga.com/*
 // @grant        none
@@ -2762,8 +2762,21 @@
     }
     installFilterOutsideListener();
     installNotificationSyncOutsideListener();
-    const title = document.querySelector('#colony-picker');
-    if (title && !title.querySelector('.fa-summary-sidebar-btn')) { const button = document.createElement('button'); button.type = 'button'; button.className = 'fa-summary-sidebar-btn'; button.textContent = 'Overview'; button.title = 'Open universe overview'; button.addEventListener('click', openPanel); title.appendChild(button); }
+    const picker = document.querySelector('#colony-picker');
+    if (picker) {
+      let button = document.querySelector('.fa-summary-sidebar-btn');
+      if (!button) {
+        button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'fa-summary-sidebar-btn';
+        button.textContent = 'Overview';
+        button.title = 'Open universe overview';
+        button.addEventListener('click', openPanel);
+      }
+      // Keep Overview beside the colony picker, before—not inside—the picker
+      // so it appears to the left of the colonies dropdown.
+      if (picker.previousElementSibling !== button) picker.insertAdjacentElement('beforebegin', button);
+    }
   }
 
   function observeDom() {
