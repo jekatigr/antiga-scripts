@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Fonte Antiga - Universe Overview
 // @namespace    fa.universe-overview
-// @version      2.54.39
+// @version      2.54.40
 // @description  Locally summarize colonies with overview, building, ship, and defense inventory tabs
 // @match        *://fonteantiga.com/*
 // @grant        none
@@ -110,7 +110,7 @@
   // notification consumer so either script works when installed alone.
   (function startNotificationCacheService() {
     const SERVICE_KEY = '__faNotificationCacheService';
-    const SERVICE_VERSION = 4;
+    const SERVICE_VERSION = 5;
     if (window[SERVICE_KEY]) {
       if (window[SERVICE_KEY].version !== SERVICE_VERSION) {
         window.alert(`Fonte Antiga notification scripts are incompatible. Update all notification scripts to version ${SERVICE_VERSION}.`);
@@ -192,8 +192,15 @@
     }
     async function meta(db) { return result(db.transaction(META, 'readonly').objectStore(META).get(META_KEY)); }
     async function saveMeta(db, changes) {
-      const current = (await meta(db)) || {};
-      return result(db.transaction(META, 'readwrite').objectStore(META).put({ ...current, ...changes, key: META_KEY }));
+      return new Promise((resolve, reject) => {
+        const tx = db.transaction(META, 'readwrite');
+        const store = tx.objectStore(META);
+        const current = store.get(META_KEY);
+        current.onsuccess = () => store.put({ ...(current.result || {}), ...changes, key: META_KEY });
+        tx.oncomplete = () => resolve();
+        tx.onerror = () => reject(tx.error || new Error('Could not save notification sync metadata.'));
+        tx.onabort = () => reject(tx.error || new Error('Could not save notification sync metadata.'));
+      });
     }
     function items(body) {
       return body && Array.isArray(body.items) ? body.items
@@ -289,22 +296,29 @@
     installPageNetworkBridge();
     async function upsert(notifications, changes = {}, announceUpdate = true) {
       const db = await openDb();
-      // Notifications are immutable. Load cache keys once, then treat an
-      // already-known ID as a no-op instead of rewriting/counting the store.
       if (!knownIds) knownIds = new Set((await result(db.transaction(STORE, 'readonly').objectStore(STORE).getAllKeys())).map(String));
       const fresh = notifications.filter(notification => notification?.id != null && !knownIds.has(String(notification.id)));
-      if (fresh.length) {
-        await new Promise((resolve, reject) => {
-          const tx = db.transaction(STORE, 'readwrite');
-          fresh.forEach(notification => tx.objectStore(STORE).put(notification));
-          tx.oncomplete = resolve;
+      let cached = knownIds.size;
+      if (fresh.length || Object.keys(changes).length) {
+        cached = await new Promise((resolve, reject) => {
+          const tx = db.transaction([STORE, META], 'readwrite');
+          const notificationStore = tx.objectStore(STORE);
+          const metadataStore = tx.objectStore(META);
+          fresh.forEach(notification => notificationStore.put(notification));
+          const count = notificationStore.count();
+          count.onsuccess = () => {
+            const current = metadataStore.get(META_KEY);
+            current.onsuccess = () => metadataStore.put({
+              ...(current.result || {}), ...changes, key: META_KEY,
+              cached: count.result, updatedAt: new Date().toISOString(),
+            });
+          };
+          tx.oncomplete = () => resolve(count.result);
           tx.onerror = () => reject(tx.error || new Error('Could not save notifications.'));
           tx.onabort = () => reject(tx.error || new Error('Could not save notifications.'));
         });
         fresh.forEach(notification => knownIds.add(String(notification.id)));
       }
-      const cached = knownIds.size;
-      if (fresh.length || Object.keys(changes).length) await saveMeta(db, { ...changes, cached, updatedAt: new Date().toISOString() });
       if (announceUpdate && fresh.length) announce(fresh);
       return { cached, fresh };
     }
@@ -342,25 +356,38 @@
       const runSync = async () => {
         const db = await openDb();
         const previous = await meta(db);
-        const keys = new Set((await result(db.transaction(STORE, 'readonly').objectStore(STORE).getAllKeys())).map(String));
-        knownIds = keys;
+        const initialCachedIds = new Set((await result(db.transaction(STORE, 'readonly').objectStore(STORE).getAllKeys())).map(String));
+        // Keep this immutable snapshot solely for the safe historical boundary.
+        // IDs observed during this run must never make the traversal stop.
+        knownIds = new Set(initialCachedIds);
+        const seenThisRun = new Set();
         let downloaded = 0;
-        let cachedCount = keys.size;
-        setSyncState('syncing', { offset: 0, total: force ? keys.size : 0, cached: force ? 0 : cachedCount, force, error: '' });
-        // A completed sync can stop at the first cached item. An interrupted
-        // sync must first reach the last notification committed by its prior
-        // run; cached items before that checkpoint do not prove that there is
-        // no gap after it.
+        let cachedCount = knownIds.size;
+        setSyncState('syncing', { offset: 0, total: force ? cachedCount : 0, cached: force ? 0 : cachedCount, force, error: '' });
+        // A completed sync can stop at an ID that was already persisted before
+        // this run. An interrupted sync must first reach its committed checkpoint;
+        // cached IDs before that checkpoint are not safe stopping boundaries.
         const full = force || !previous || previous.status !== 'complete';
         const resumeId = !force && full && previous && previous.status === 'syncing' && previous.lastDownloadedId != null
           ? String(previous.lastDownloadedId) : null;
         let checkpointReached = !resumeId;
         let offset = 0;
         let current = await page(0);
-        const syncTotal = force ? Math.max(keys.size, current.total) : current.total;
-        setSyncState('syncing', { offset: 0, total: syncTotal, cached: force ? 0 : keys.size });
-        await saveMeta(db, { status: 'syncing', total: syncTotal, nextOffset: 0 });
+        const syncTotal = force ? Math.max(cachedCount, current.total) : current.total;
+        let previousTotal = current.total;
+        setSyncState('syncing', { offset: 0, total: syncTotal, cached: force ? 0 : cachedCount });
+        // Clear only a completed run's marker. An interrupted run retains its
+        // committed checkpoint until this run reaches and replaces it.
+        await saveMeta(db, {
+          status: 'syncing', total: syncTotal, nextOffset: 0,
+          ...(resumeId ? {} : { lastDownloadedId: null }),
+        });
         while (current.itemCount > 0) {
+          const totalDelta = current.total - previousTotal;
+          // New records shift offsets downward; queue a short next-pass head
+          // sync to capture them. Deletions shift unseen records upward, so
+          // rewind only by the observed deletion count after this page.
+          if (totalDelta > 0) syncPending = true;
           if (stopRequested) {
             const stopped = new Error('Notification synchronization stopped by the user.');
             stopped.code = 'FA_SYNC_STOPPED';
@@ -371,63 +398,48 @@
             ? notifications.findIndex(notification => String(notification.id) === resumeId) : -1;
           if (checkpointIndex >= 0) checkpointReached = true;
 
-          // Before the checkpoint, cached records are ignored as stop signals.
-          // Once the checkpoint has been reached, or for a completed sync, the
-          // first cached record is the safe boundary for this page.
           let boundaryIndex = -1;
           if (!force && (!full || (resumeId && checkpointReached))) {
             const searchFrom = checkpointIndex >= 0 ? checkpointIndex + 1 : 0;
             boundaryIndex = notifications.findIndex((notification, index) =>
-              index >= searchFrom && keys.has(String(notification.id)));
+              index >= searchFrom && initialCachedIds.has(String(notification.id)));
           }
           const pageNotifications = boundaryIndex >= 0
             ? notifications.slice(0, boundaryIndex) : notifications;
+          // Offset pages can overlap when new notifications arrive. Remember
+          // those duplicates separately, but stop only at the initial cache.
           const fresh = pageNotifications.filter(notification => {
             const key = String(notification.id);
-            if (keys.has(key)) return false;
-            keys.add(key);
-            return true;
+            if (seenThisRun.has(key)) return false;
+            seenThisRun.add(key);
+            return !knownIds.has(key);
           });
           const lastDownloaded = pageNotifications[pageNotifications.length - 1];
           const checkpoint = checkpointReached && lastDownloaded
             ? { lastDownloadedId: String(lastDownloaded.id) } : {};
-          // Force mode deliberately writes every notification returned by every
-          // page, including records already present in IndexedDB. It never
-          // uses the cached-record boundary used by the normal sync.
+          const pageOffset = offset;
+          offset += current.itemCount;
+          if (totalDelta < 0) offset = Math.max(0, pageOffset + totalDelta);
+          previousTotal = current.total;
           const saved = await upsert(
-            force ? notifications : fresh,
+            fresh,
             { status: 'syncing', total: syncTotal, nextOffset: offset, ...checkpoint },
             false,
           );
-          offset += current.itemCount;
-          if (force) {
-            downloaded += notifications.length;
-            // The authoritative count from upsert() includes duplicate IDs.
-            // Never derive the store size from downloaded row count.
-            if (saved) cachedCount = saved.cached;
-          } else {
-            // `fresh` is filtered against `keys`, so this increments only for
-            // IDs not already present, including partially cached pages.
-            cachedCount += fresh.length;
-          }
-          const overallDownloaded = cachedCount;
-          await saveMeta(db, {
-            status: 'syncing', total: syncTotal, cached: overallDownloaded, nextOffset: offset, ...checkpoint,
-          });
+          cachedCount = saved.cached;
+          if (force) downloaded += pageNotifications.length;
           setSyncState('syncing', {
             offset,
             total: syncTotal,
-            cached: force ? downloaded : overallDownloaded,
+            cached: force ? downloaded : cachedCount,
           });
           // Force mode cannot rely on a possibly stale/missing total. Keep
           // paging while the API returns full pages and stop only on a short
-          // page (the final page). Normal sync retains its total/boundary stop.
+          // page (the final page). Normal sync retains its safe boundary stop.
           if (boundaryIndex >= 0 || (!force && offset >= current.total) || (force && current.itemCount < PAGE_SIZE)) break;
           await new Promise(resolve => setTimeout(resolve, PAGE_DELAY));
           current = await page(offset);
         }
-        // `cachedCount` is exact: incremental sync adds only fresh IDs, while
-        // force sync receives the authoritative object-store count from upsert.
         await saveMeta(db, { status: 'complete', total: syncTotal, cached: cachedCount, nextOffset: offset, updatedAt: new Date().toISOString() });
         setSyncState('complete', { offset, total: syncTotal, cached: cachedCount, force: false, error: '' });
         announce();
@@ -449,7 +461,7 @@
         })
         .catch(error => {
           if (error?.code === 'FA_SYNC_STOPPED' || stopRequested) {
-            setSyncState('stopped', { error: '', force: false });
+            setSyncState('idle', { error: '', force: false });
             return false;
           }
           const message = error?.message || 'Notification sync failed.';
@@ -466,6 +478,10 @@
         })
         .finally(() => {
           syncPromise = null;
+          if (syncPending) {
+            syncPending = false;
+            scheduleSync(2000);
+          }
         });
       return syncPromise;
     }
@@ -477,7 +493,7 @@
         syncTimer = null;
       }
       activeController?.abort();
-      setSyncState('stopped', { error: '', force: false });
+      setSyncState('idle', { error: '', force: false });
       return true;
     }
     async function forceSync() {
@@ -2314,7 +2330,7 @@
   }
   function notificationSyncDisplay() {
     const sync = state.notificationSync || { state: 'idle' };
-    const status = ['scheduled', 'syncing', 'complete', 'error', 'stopped'].includes(sync.state) ? sync.state : 'idle';
+    const status = ['scheduled', 'syncing', 'complete', 'error'].includes(sync.state) ? sync.state : 'idle';
     if (status === 'scheduled') return { status, text: 'Notifications: scheduled', title: 'Notification synchronization is queued.' };
     if (status === 'syncing') {
       const downloaded = Number(sync.cached) || 0;
@@ -2322,7 +2338,6 @@
       return { status, text: `Notifications: syncing${progress}`, title: sync.force ? 'A full notification resynchronization is in progress.' : 'Notification history is being synchronized in the background.' };
     }
     if (status === 'complete') return { status, text: `Notifications: synced${sync.cached != null ? ` · ${sync.cached} cached` : ''}`, title: 'Notification cache is synchronized.' };
-    if (status === 'stopped') return { status, text: 'Notifications: sync stopped', title: 'Notification synchronization was stopped. It can be started again with Force re-sync.' };
     if (status === 'error') return { status, text: 'Notifications: sync error', title: sync.error || 'Notification synchronization failed.' };
     return { status, text: 'Notifications: idle', title: 'Notification synchronization is idle.' };
   }
