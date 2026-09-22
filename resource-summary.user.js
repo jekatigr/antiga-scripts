@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Fonte Antiga - Resource Summary
 // @namespace    fa.res-summary
-// @version      1.1.4
+// @version      1.1.5
 // @description  Show Σ total after resources in notification cards and active fleet cargo rows
 // @match        *://fonteantiga.com/*
 // @grant        none
@@ -56,8 +56,12 @@
     span.className = 'stat fa-res-total';
     const label = `Σ ${fmt(total)}`;
     if (span.textContent !== label) span.textContent = label;
-    if (!existing) row.insertBefore(span, lastEl.nextElementSibling);
-    else if (span.previousElementSibling !== lastEl) lastEl.insertAdjacentElement('afterend', span);
+    // Fleet resources are nested in the single "Cargo:" stat span. Appending
+    // the total to .stat-row makes it a second flex item and sends it to the
+    // far edge of the card while the fleet is re-rendered after a recall.
+    const resourceParent = lastEl.parentElement;
+    if (!existing) resourceParent?.insertBefore(span, lastEl.nextSibling);
+    else if (span.parentElement !== resourceParent || span.previousElementSibling !== lastEl) lastEl.insertAdjacentElement('afterend', span);
   }
 
   function addTotalToNotificationGrid(grid) {
