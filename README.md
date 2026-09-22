@@ -32,9 +32,6 @@ Keeps the **Deploy Fleet** controls above your **Active Fleets**, so you can lau
 ### [Launch Fleet Range](https://github.com/jekatigr/antiga-scripts/blob/master/launch-fleet-and-advance.user.js)
 Adds a range-labelled launch button next to the normal launch button. For example, **Launch to 5-20** repeats the currently selected fleet configuration for the planets at and after the current position, stopping at the first limit reached: available ships, remaining fleet-command slots, or planets left in the system. While launching, it shows progress and waits 1 second between fleets.
 
-### [Open All Notifications](https://github.com/jekatigr/antiga-scripts/blob/master/open-all-notifications.user.js)
-Adds **Open all** to the Notifications panel. It expands every notification currently shown and marks them as read, while keeping their unread appearance until you leave the current page or notification view.
-
 ### [Resource Summary](https://github.com/jekatigr/antiga-scripts/blob/master/resource-summary.user.js)
 Shows a **Σ total** beside resource amounts in exploration reports, battle results, harvest reports, and active fleet cargo, so you can see the combined haul without adding Metal, Silicon, and Helium yourself.
 
