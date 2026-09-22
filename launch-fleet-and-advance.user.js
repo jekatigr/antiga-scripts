@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Fonte Antiga - Launch Fleet and Advance
 // @namespace    fa.fleet-launch-next
-// @version      1.4.3
+// @version      1.4.4
 // @description  Add a range launch button to send the selected fleet to multiple destinations
 // @match        *://fonteantiga.com/*
 // @grant        none
@@ -69,11 +69,22 @@
     .fa-launch-progress .ip-label {
       display: none;
     }
-    .fa-launch-max-wrap {
+    .fa-launch-actions {
+      display: flex;
+      flex: none;
+      flex-wrap: nowrap;
+      align-items: stretch;
+      gap: 0.65rem;
+      margin-left: auto;
+    }
+    .fa-launch-actions .fa-launch-max-wrap {
       position: relative;
-      display: inline-flex;
-      align-items: center;
-      vertical-align: middle;
+      display: flex;
+      align-items: stretch;
+    }
+    .fa-launch-actions .fa-launch-max-btn {
+      height: 100%;
+      min-height: 0;
     }
     .fa-launch-max-wrap .fa-launch-max-btn {
       padding-right: 2.1em;
@@ -362,11 +373,38 @@
     window.quickDeployFleet = wrappedQuickDeployFleet;
   }
 
+  function placeLaunchActions(footer, launchButton, maxWrap) {
+    let actions = footer.querySelector('.fa-launch-actions');
+    if (!actions) {
+      actions = document.createElement('div');
+      actions.className = 'fa-launch-actions';
+      launchButton.insertAdjacentElement('beforebegin', actions);
+    }
+    if (!actions.contains(launchButton)) actions.appendChild(launchButton);
+    if (!actions.contains(maxWrap)) actions.appendChild(maxWrap);
+
+    // The game may give Launch Fleet a context-dependent height. Match that
+    // rendered height exactly so the adjacent range button forms one action row.
+    requestAnimationFrame(() => {
+      const height = launchButton.getBoundingClientRect().height;
+      if (Number.isFinite(height) && height > 0) {
+        maxWrap.style.height = `${height}px`;
+        maxWrap.querySelector('.fa-launch-max-btn').style.height = `${height}px`;
+      }
+    });
+  }
+
   function addLaunchButton() {
     installQuickDeployHook();
     const footer = document.querySelector('#deploy-fleet-frame .deploy-fleet-footer');
     const launchButton = footer && footer.querySelector('.deploy-launch-btn:not(.fa-launch-max-btn)');
-    if (!launchButton || footer.querySelector('.fa-launch-max-btn')) return;
+    if (!launchButton) return;
+
+    const existingWrap = footer.querySelector('.fa-launch-max-wrap');
+    if (existingWrap) {
+      placeLaunchActions(footer, launchButton, existingWrap);
+      return;
+    }
 
     const maxButton = document.createElement('button');
     maxButton.type = 'button';
@@ -418,7 +456,7 @@
       setTimeout(updateLabel, 0);
     });
     updateLabel();
-    launchButton.insertAdjacentElement('afterend', maxWrap);
+    placeLaunchActions(footer, launchButton, maxWrap);
 
   }
 
