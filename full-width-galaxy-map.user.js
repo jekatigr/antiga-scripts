@@ -1,9 +1,9 @@
 // ==UserScript==
 // @name         Fonte Antiga - Full-Width Galaxy Map
 // @namespace    fa.galaxy-map-full-width
-// @version      1.0.4
+// @version      1.0.5
 // @description  Expand the galaxy map canvas to the full width of its frame
-// @match        *://antiga.hatedabamboo.me/*
+// @match        *://fonteantiga.com/*
 // @grant        none
 // @run-at       document-end
 // ==/UserScript==

@@ -1,9 +1,9 @@
 // ==UserScript==
 // @name         Fonte Antiga - Universe Overview
 // @namespace    fa.universe-overview
-// @version      2.54.36
+// @version      2.54.37
 // @description  Locally summarize colonies with overview, building, ship, and defense inventory tabs
-// @match        *://antiga.hatedabamboo.me/*
+// @match        *://fonteantiga.com/*
 // @grant        none
 // @run-at       document-start
 // ==/UserScript==

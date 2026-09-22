@@ -1,9 +1,9 @@
 // ==UserScript==
 // @name         Fonte Antiga - Resource Summary
 // @namespace    fa.res-summary
-// @version      1.1.2
+// @version      1.1.3
 // @description  Show Σ total after resources in notification cards and active fleet cargo rows
-// @match        *://antiga.hatedabamboo.me/*
+// @match        *://fonteantiga.com/*
 // @grant        none
 // ==/UserScript==
 

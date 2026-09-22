@@ -1,6 +1,6 @@
 # Fonte Antiga – Tampermonkey Scripts
 
-Quality-of-life userscripts for [Fonte Antiga](https://antiga.hatedabamboo.me), a browser-based space strategy game.
+Quality-of-life userscripts for [Fonte Antiga](https://fonteantiga.com), a browser-based space strategy game.
 
 ## Tested With
 

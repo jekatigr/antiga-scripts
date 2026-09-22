@@ -1,9 +1,9 @@
 // ==UserScript==
 // @name         Fonte Antiga - Launch Fleet and Advance
 // @namespace    fa.fleet-launch-next
-// @version      1.4.2
+// @version      1.4.3
 // @description  Add a range launch button to send the selected fleet to multiple destinations
-// @match        *://antiga.hatedabamboo.me/*
+// @match        *://fonteantiga.com/*
 // @grant        none
 // @run-at       document-end
 // ==/UserScript==

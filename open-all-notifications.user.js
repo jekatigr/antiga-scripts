@@ -1,9 +1,9 @@
 // ==UserScript==
 // @name         Fonte Antiga - Open All Notifications
 // @namespace    fa.notifications-open-all
-// @version      1.4.4
+// @version      1.4.5
 // @description  Open all notifications and mark them read without changing their appearance until leaving the current view
-// @match        *://antiga.hatedabamboo.me/*
+// @match        *://fonteantiga.com/*
 // @grant        none
 // @run-at       document-end
 // ==/UserScript==

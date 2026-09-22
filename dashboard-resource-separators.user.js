@@ -1,9 +1,9 @@
 // ==UserScript==
 // @name         Fonte Antiga - Dashboard Resource Separators
 // @namespace    fa.dashboard-resource-separators
-// @version      1.3.2
+// @version      1.3.3
 // @description  Add space separators to available and storage resource amounts on the dashboard
-// @match        *://antiga.hatedabamboo.me/*
+// @match        *://fonteantiga.com/*
 // @grant        none
 // @run-at       document-start
 // ==/UserScript==

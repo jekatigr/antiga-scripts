@@ -1,9 +1,9 @@
 // ==UserScript==
 // @name         Fonte Antiga - Notification Target Systems
 // @namespace    fa.notifications-target-systems
-// @version      1.6.11
+// @version      1.6.12
 // @description  Cache notifications locally and mark their target systems on the galaxy map
-// @match        *://antiga.hatedabamboo.me/*
+// @match        *://fonteantiga.com/*
 // @grant        none
 // @run-at       document-start
 // ==/UserScript==

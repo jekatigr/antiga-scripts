@@ -1,9 +1,9 @@
 // ==UserScript==
 // @name         Fonte Antiga - Fleet Block Order
 // @namespace    fa.fleet-block-order
-// @version      1.1.1
+// @version      1.1.2
 // @description  Place the Deploy Fleet block above the Active Fleets block
-// @match        *://antiga.hatedabamboo.me/*
+// @match        *://fonteantiga.com/*
 // @grant        none
 // @run-at       document-end
 // ==/UserScript==

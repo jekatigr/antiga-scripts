@@ -1,6 +1,6 @@
 # Fonte Antiga – Tampermonkey Scripts
 
-Browser-based space strategy game at `https://antiga.hatedabamboo.me`.  
+Browser-based space strategy game at `https://fonteantiga.com`.  
 This project contains Tampermonkey userscripts to enhance gameplay.
 
 ## Source snapshots
@@ -209,7 +209,7 @@ These are the actual JavaScript modules loaded by the saved page. Userscripts in
 // @namespace    fa.<feature-slug>
 // @version      1.0.0
 // @description  <What it does>
-// @match        *://antiga.hatedabamboo.me/*
+// @match        *://fonteantiga.com/*
 // @grant        none
 // ==/UserScript==
 
