@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Fonte Antiga - Explore From Nearest Colony
 // @namespace    fa.galaxy-explore-nearest-colony
-// @version      1.1.4
+// @version      1.1.5
 // @description  Start Galaxy exploration missions from the closest owned colony
 // @match        *://fonteantiga.com/*
 // @grant        none
@@ -44,7 +44,7 @@
           state.currentPlanetId = id;
           state.lastPlanetId = id;
           localStorage.setItem('galaxygame_planet', String(id));
-          document.querySelectorAll('#sidebar-planets .sidebar-planet-pill').forEach(function (pill) {
+          document.querySelectorAll('#colony-picker-list .colony-picker-row').forEach(function (pill) {
             pill.classList.toggle('active', pill.dataset.planetId === String(id));
           });
           if (typeof refreshTopbarPlanets === 'function') {

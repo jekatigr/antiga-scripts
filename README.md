@@ -6,7 +6,7 @@ Quality-of-life userscripts for [Fonte Antiga](https://fonteantiga.com), a brows
 
 | Game Version |
 |----------|
-| 0.5.0 |
+| 0.5.1 |
 
 ## Installation
 

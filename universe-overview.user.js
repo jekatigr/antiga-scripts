@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Fonte Antiga - Universe Overview
 // @namespace    fa.universe-overview
-// @version      2.54.37
+// @version      2.54.38
 // @description  Locally summarize colonies with overview, building, ship, and defense inventory tabs
 // @match        *://fonteantiga.com/*
 // @grant        none
@@ -714,7 +714,7 @@
   function now() { return Date.now(); }
   function number(value) { return typeof value === 'number' && Number.isFinite(value) ? value : Number(value) || 0; }
   function lastOpenedOwnedPlanetId() {
-    const activePill = document.querySelector('#sidebar-planets .sidebar-planet-pill.active[data-planet-id]');
+    const activePill = document.querySelector('#colony-picker-list .colony-picker-row.active[data-planet-id]');
     const activeId = Number(activePill?.dataset.planetId);
     if (Number.isSafeInteger(activeId) && activeId > 0) {
       state.lastOpenedPlanetId = activeId;
@@ -1213,11 +1213,11 @@
 
   function sidebarPlanets(shouldCanonicalize = true) {
     const result = [];
-    document.querySelectorAll('#sidebar-planets .sidebar-planet-pill[data-planet-id]').forEach(pill => {
+    document.querySelectorAll('#colony-picker-list .colony-picker-row[data-planet-id]').forEach(pill => {
       const planetId = Number(pill.dataset.planetId);
       if (!Number.isSafeInteger(planetId)) return;
-      const location = coordsFromText(pill.querySelector('.sidebar-planet-coords')?.textContent);
-      const sidebarName = pill.querySelector('.sidebar-planet-name')?.textContent.trim() || null;
+      const location = coordsFromText(pill.querySelector('.colony-picker-row-coords')?.textContent);
+      const sidebarName = pill.querySelector('.colony-picker-row-name')?.textContent.trim() || null;
       const record = getOrCreateRecord({ planetId, name: sidebarName, system: location?.system, position: location?.position, owned: true });
       record.owned = true;
       // The live sidebar is authoritative for the current owned-planet name.
@@ -2693,8 +2693,8 @@
     }
     installFilterOutsideListener();
     installNotificationSyncOutsideListener();
-    const title = document.querySelector('#planet-sidebar .planet-sidebar-title');
-    if (title && !title.querySelector('.fa-summary-sidebar-btn')) { const button = document.createElement('button'); button.type = 'button'; button.className = 'fa-summary-sidebar-btn'; button.textContent = 'Overview'; button.addEventListener('click', openPanel); title.appendChild(button); }
+    const title = document.querySelector('#colony-picker');
+    if (title && !title.querySelector('.fa-summary-sidebar-btn')) { const button = document.createElement('button'); button.type = 'button'; button.className = 'fa-summary-sidebar-btn'; button.textContent = 'Overview'; button.title = 'Open universe overview'; button.addEventListener('click', openPanel); title.appendChild(button); }
   }
 
   function observeDom() {
@@ -2745,7 +2745,7 @@
     ensurePanel();
     let sidebarObserver = null;
     const attachSidebarObserver = () => {
-      const sidebar = document.querySelector('#sidebar-planets');
+      const sidebar = document.querySelector('#colony-picker-list');
       if (!sidebar) return false;
       if (sidebarObserver) sidebarObserver.disconnect();
       sidebarObserver = new MutationObserver(() => {

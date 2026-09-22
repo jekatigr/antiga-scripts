@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Fonte Antiga - Open All Notifications
 // @namespace    fa.notifications-open-all
-// @version      1.4.5
+// @version      1.4.6
 // @description  Open all notifications and mark them read without changing their appearance until leaving the current view
 // @match        *://fonteantiga.com/*
 // @grant        none
@@ -117,6 +117,20 @@
 
   function toggleAllNotifications() {
     const cards = document.querySelectorAll('#notifications-container .notif-card');
+    const rows = document.querySelectorAll('#notifications-container .notif-row');
+    // v0.5.1 replaced expandable notification cards with selectable rows and
+    // a split reader. Let the game's own row handler open/read each report.
+    if (rows.length && !cards.length) {
+      if (allNotificationsOpen) {
+        document.querySelector('#notif-reader .notif-reader-back')?.click();
+        allNotificationsOpen = false;
+      } else {
+        allNotificationsOpen = true;
+        rows.forEach(row => row.click());
+      }
+      updateButton();
+      return;
+    }
     if (allNotificationsOpen) {
       allNotificationsOpen = false;
       cards.forEach(card => card.classList.remove('expanded'));
@@ -138,7 +152,7 @@
 
   function flushBeforeNotificationNavigation(event) {
     const target = event.target instanceof Element
-      ? event.target.closest('.tab-btn[data-tab="notifications"], #notif-filter-bar .sub-tab-btn, #notif-pager #notif-prev, #notif-pager #notif-next')
+      ? event.target.closest('.tab-btn[data-tab="notifications"], #notif-filter-bar .sub-tab-btn, #notif-scope-bar .sub-tab-btn, #notif-filter-list .notif-filter-row, #notif-pager #notif-prev, #notif-pager #notif-next')
       : null;
     if (!target || target.disabled) return;
     allNotificationsOpen = false;
@@ -147,7 +161,8 @@
   }
 
   function updateButton() {
-    const bar = document.getElementById('notif-filter-bar');
+    const bar = document.getElementById('notif-filter-bar')
+      || document.querySelector('#panel-notifications .notif-toolbar');
     if (!bar) return;
 
     let button = document.querySelector('.fa-expand-unread-btn');
@@ -160,14 +175,16 @@
 
     const readAllButton = document.getElementById('notif-read-all-btn');
     const clearButton = document.getElementById('notif-clear-btn');
-    const anchor = readAllButton && readAllButton.parentElement === bar.parentElement ? readAllButton : clearButton;
-    if (anchor && anchor.parentElement === bar.parentElement && anchor.previousElementSibling !== button) {
+    const anchor = readAllButton && readAllButton.parentElement === bar.querySelector('.notif-toolbar-actions') ? readAllButton : clearButton;
+    if (anchor && anchor.parentElement && anchor.previousElementSibling !== button) {
       anchor.insertAdjacentElement('beforebegin', button);
     }
 
     const cards = document.querySelectorAll('#notifications-container .notif-card');
-    if (cards.length === 0) allNotificationsOpen = false;
-    button.disabled = cards.length === 0;
+    const rows = document.querySelectorAll('#notifications-container .notif-row');
+    const itemCount = cards.length || rows.length;
+    if (itemCount === 0) allNotificationsOpen = false;
+    button.disabled = itemCount === 0;
     const text = allNotificationsOpen ? 'Close all' : 'Open all';
     if (button.textContent !== text) button.textContent = text;
     const title = allNotificationsOpen

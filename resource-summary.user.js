@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Fonte Antiga - Resource Summary
 // @namespace    fa.res-summary
-// @version      1.1.3
+// @version      1.1.4
 // @description  Show Σ total after resources in notification cards and active fleet cargo rows
 // @match        *://fonteantiga.com/*
 // @grant        none
@@ -60,10 +60,23 @@
     else if (span.previousElementSibling !== lastEl) lastEl.insertAdjacentElement('afterend', span);
   }
 
+  function addTotalToNotificationGrid(grid) {
+    const cells = [...grid.querySelectorAll('.notif-res[data-res]')];
+    const existing = grid.querySelector('.fa-res-total');
+    if (!cells.length) { existing?.remove(); return; }
+    const total = cells.reduce((sum, cell) => sum + parseNum(cell.querySelector('.notif-res-val')?.textContent || ''), 0);
+    if (!total) { existing?.remove(); return; }
+    const span = existing || document.createElement('span');
+    span.className = 'stat fa-res-total';
+    span.textContent = `Σ ${fmt(total)}`;
+    if (!existing) grid.appendChild(span);
+  }
+
   function update() {
-    // Update in place. Removing and recreating our own totals on every pass
-    // creates a MutationObserver feedback loop and unnecessary layout work.
+    // v0.5.1 renders notification resources as .notif-res chips instead of
+    // the former .stat-m/.stat-s/.stat-h notification rows.
     const notifContainer = document.getElementById('notifications-container');
+    notifContainer?.querySelectorAll('.notif-res-grid').forEach(addTotalToNotificationGrid);
     notifContainer?.querySelectorAll('.notif-card .stat-row').forEach(addTotalToRow);
 
     const fleetsContainer = document.getElementById('fleets-container');
