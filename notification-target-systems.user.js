@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Fonte Antiga - Notification Target Systems
 // @namespace    fa.notifications-target-systems
-// @version      1.6.12
+// @version      1.6.13
 // @description  Cache notifications locally and mark their target systems on the galaxy map
 // @match        *://fonteantiga.com/*
 // @grant        none
@@ -44,7 +44,7 @@
   // notification consumer so either script works when installed alone.
   (function startNotificationCacheService() {
     const SERVICE_KEY = '__faNotificationCacheService';
-    const SERVICE_VERSION = 3;
+    const SERVICE_VERSION = 4;
     if (window[SERVICE_KEY]) {
       if (window[SERVICE_KEY].version !== SERVICE_VERSION) {
         window.alert(`Fonte Antiga notification scripts are incompatible. Update all notification scripts to version ${SERVICE_VERSION}.`);
@@ -66,6 +66,8 @@
     let syncPromise = null;
     let syncTimer = null;
     let syncPending = false;
+    let stopRequested = false;
+    let activeController = null;
     let lastUnread = null;
     let syncState = { state: 'idle', offset: 0, total: 0, cached: 0, error: '' };
     let announceTimer = null;
@@ -240,6 +242,7 @@
     }
     async function page(offset) {
       const controller = typeof AbortController === 'function' ? new AbortController() : null;
+      activeController = controller;
       const timeout = setTimeout(() => controller?.abort(), PAGE_TIMEOUT);
       try {
         const response = await fetch(`/api/notifications?limit=${PAGE_SIZE}&offset=${offset}`, {
@@ -251,16 +254,23 @@
         if (!body || !Array.isArray(body.items)) throw new Error('Notification response has an unknown shape.');
         return { notifications: items(body), itemCount: body.items.length, total: Number(body.total) || body.items.length };
       } catch (error) {
+        if (stopRequested) {
+          const stopped = new Error('Notification synchronization stopped by the user.');
+          stopped.code = 'FA_SYNC_STOPPED';
+          throw stopped;
+        }
         if (controller?.signal.aborted) {
           throw new Error(`Notification request timed out after ${PAGE_TIMEOUT / 1000}s (offset ${offset}).`);
         }
         throw error;
       } finally {
         clearTimeout(timeout);
+        if (activeController === controller) activeController = null;
       }
     }
     async function sync(force = false) {
       if (syncPromise) return syncPromise;
+      stopRequested = false;
       const runSync = async () => {
         const db = await openDb();
         const previous = await meta(db);
@@ -283,6 +293,11 @@
         setSyncState('syncing', { offset: 0, total: syncTotal, cached: force ? 0 : keys.size });
         await saveMeta(db, { status: 'syncing', total: syncTotal, nextOffset: 0 });
         while (current.itemCount > 0) {
+          if (stopRequested) {
+            const stopped = new Error('Notification synchronization stopped by the user.');
+            stopped.code = 'FA_SYNC_STOPPED';
+            throw stopped;
+          }
           const notifications = current.notifications;
           const checkpointIndex = !checkpointReached && resumeId
             ? notifications.findIndex(notification => String(notification.id) === resumeId) : -1;
@@ -365,6 +380,10 @@
           return result;
         })
         .catch(error => {
+          if (error?.code === 'FA_SYNC_STOPPED' || stopRequested) {
+            setSyncState('stopped', { error: '', force: false });
+            return false;
+          }
           const message = error?.message || 'Notification sync failed.';
           setSyncState('error', { error: message, errorAt: new Date().toISOString() });
           // Do not leave a transient network failure looking permanently stuck.
@@ -381,6 +400,17 @@
           syncPromise = null;
         });
       return syncPromise;
+    }
+    async function stopSync() {
+      stopRequested = true;
+      syncPending = false;
+      if (syncTimer) {
+        clearTimeout(syncTimer);
+        syncTimer = null;
+      }
+      activeController?.abort();
+      setSyncState('stopped', { error: '', force: false });
+      return true;
     }
     async function forceSync() {
       if (syncTimer) {
@@ -423,7 +453,7 @@
     // parse, IndexedDB transaction, and update event.
     // Start a delayed, serialized backfill so the game's initial rendering and
     // requests get priority. Later unread increases schedule a short sync.
-    window[SERVICE_KEY] = { version: SERVICE_VERSION, sync, forceSync, getSyncState: () => ({ ...syncState }) };
+    window[SERVICE_KEY] = { version: SERVICE_VERSION, sync, forceSync, stopSync, getSyncState: () => ({ ...syncState }) };
     scheduleSync(2000);
   })();
 
