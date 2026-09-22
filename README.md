@@ -38,9 +38,6 @@ Adds **Open all** to the Notifications panel. It expands every notification curr
 ### [Resource Summary](https://github.com/jekatigr/antiga-scripts/blob/master/resource-summary.user.js)
 Shows a **Σ total** beside resource amounts in exploration reports, battle results, harvest reports, and active fleet cargo, so you can see the combined haul without adding Metal, Silicon, and Helium yourself.
 
-### [Dashboard Resource Separators](https://github.com/jekatigr/antiga-scripts/blob/master/dashboard-resource-separators.user.js)
-Makes large resource values easier to read by separating thousands. For example, `100000/7654321` becomes `100 000/7 654 321`.
-
 ### [Notification Target Systems](https://github.com/jekatigr/antiga-scripts/blob/master/notification-target-systems.user.js)
 Highlights relevant systems directly on the Galaxy map based on your notification history. Use separate filters for Planet exploration and System exploration, plus Expedition, Occupied, Attack, Transport, Harvest, and Other; Trade notifications are included under Other.
 
