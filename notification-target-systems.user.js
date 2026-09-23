@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Fonte Antiga - Notification Target Systems
 // @namespace    fa.notifications-target-systems
-// @version      1.6.18
+// @version      1.6.19
 // @description  Cache notifications locally and mark their target systems on the galaxy map
 // @match        *://fonteantiga.com/*
 // @grant        none
@@ -58,6 +58,7 @@
     const PAGE_SIZE = 10;
     const PAGE_DELAY = 2000;
     const PAGE_TIMEOUT = 30000;
+    const PAGE_RETRY_DELAYS = [2000, 5000, 10000, 20000, 30000];
     const UPDATE_EVENT = 'fa-notifications-updated';
     const SYNC_STATE_EVENT = 'fa-notifications-sync-state';
     const CHANNEL = 'fa.notifications';
@@ -283,6 +284,29 @@
         if (activeController === controller) activeController = null;
       }
     }
+    async function pageWithRetry(offset) {
+      let attempt = 0;
+      while (true) {
+        try {
+          const result = await page(offset);
+          return result;
+        } catch (error) {
+          if (stopRequested || error?.code === 'FA_SYNC_STOPPED') throw error;
+          // Keep retrying the same page so a temporary outage does not restart
+          // the traversal from the beginning and lose visible progress.
+          const delay = PAGE_RETRY_DELAYS[Math.min(attempt, PAGE_RETRY_DELAYS.length - 1)];
+          attempt += 1;
+          setSyncState('retrying', {
+            retryOffset: offset,
+            retryAttempt: attempt,
+            error: error?.message || 'Network error; retrying…',
+          });
+          for (let remaining = delay; remaining > 0 && !stopRequested; remaining -= 250) {
+            await new Promise(resolve => setTimeout(resolve, Math.min(250, remaining)));
+          }
+        }
+      }
+    }
     async function sync(force = false) {
       if (syncPromise) return syncPromise;
       stopRequested = false;
@@ -305,7 +329,7 @@
           ? String(previous.lastDownloadedId) : null;
         let checkpointReached = !resumeId;
         let offset = 0;
-        let current = await page(0);
+        let current = await pageWithRetry(0);
         const syncTotal = force ? Math.max(cachedCount, current.total) : current.total;
         let previousTotal = current.total;
         setSyncState('syncing', { offset: 0, total: syncTotal, downloaded: 0, cached: force ? 0 : cachedCount });
@@ -372,7 +396,7 @@
           // page (the final page). Normal sync retains its safe boundary stop.
           if (boundaryIndex >= 0 || (!force && offset >= current.total) || (force && current.itemCount < PAGE_SIZE)) break;
           await new Promise(resolve => setTimeout(resolve, PAGE_DELAY));
-          current = await page(offset);
+          current = await pageWithRetry(offset);
         }
         await saveMeta(db, { status: 'complete', total: syncTotal, cached: cachedCount, nextOffset: offset, updatedAt: new Date().toISOString() });
         setSyncState('complete', { offset, total: syncTotal, downloaded: offset, cached: cachedCount, force: false, error: '' });

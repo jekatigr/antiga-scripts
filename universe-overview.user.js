@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Fonte Antiga - Universe Overview
 // @namespace    fa.universe-overview
-// @version      2.54.43
+// @version      2.54.44
 // @description  Locally summarize colonies with overview, building, ship, and defense inventory tabs
 // @match        *://fonteantiga.com/*
 // @grant        none
@@ -125,6 +125,7 @@
     const PAGE_SIZE = 10;
     const PAGE_DELAY = 2000;
     const PAGE_TIMEOUT = 30000;
+    const PAGE_RETRY_DELAYS = [2000, 5000, 10000, 20000, 30000];
     const UPDATE_EVENT = 'fa-notifications-updated';
     const SYNC_STATE_EVENT = 'fa-notifications-sync-state';
     const CHANNEL = 'fa.notifications';
@@ -350,6 +351,29 @@
         if (activeController === controller) activeController = null;
       }
     }
+    async function pageWithRetry(offset) {
+      let attempt = 0;
+      while (true) {
+        try {
+          const result = await page(offset);
+          return result;
+        } catch (error) {
+          if (stopRequested || error?.code === 'FA_SYNC_STOPPED') throw error;
+          // Keep retrying the same page so a temporary outage does not restart
+          // the traversal from the beginning and lose visible progress.
+          const delay = PAGE_RETRY_DELAYS[Math.min(attempt, PAGE_RETRY_DELAYS.length - 1)];
+          attempt += 1;
+          setSyncState('retrying', {
+            retryOffset: offset,
+            retryAttempt: attempt,
+            error: error?.message || 'Network error; retrying…',
+          });
+          for (let remaining = delay; remaining > 0 && !stopRequested; remaining -= 250) {
+            await new Promise(resolve => setTimeout(resolve, Math.min(250, remaining)));
+          }
+        }
+      }
+    }
     async function sync(force = false) {
       if (syncPromise) return syncPromise;
       stopRequested = false;
@@ -372,7 +396,7 @@
           ? String(previous.lastDownloadedId) : null;
         let checkpointReached = !resumeId;
         let offset = 0;
-        let current = await page(0);
+        let current = await pageWithRetry(0);
         const syncTotal = force ? Math.max(cachedCount, current.total) : current.total;
         let previousTotal = current.total;
         setSyncState('syncing', { offset: 0, total: syncTotal, downloaded: 0, cached: force ? 0 : cachedCount });
@@ -439,7 +463,7 @@
           // page (the final page). Normal sync retains its safe boundary stop.
           if (boundaryIndex >= 0 || (!force && offset >= current.total) || (force && current.itemCount < PAGE_SIZE)) break;
           await new Promise(resolve => setTimeout(resolve, PAGE_DELAY));
-          current = await page(offset);
+          current = await pageWithRetry(offset);
         }
         await saveMeta(db, { status: 'complete', total: syncTotal, cached: cachedCount, nextOffset: offset, updatedAt: new Date().toISOString() });
         setSyncState('complete', { offset, total: syncTotal, downloaded: offset, cached: cachedCount, force: false, error: '' });
@@ -2337,8 +2361,18 @@
   }
   function notificationSyncDisplay() {
     const sync = state.notificationSync || { state: 'idle' };
-    const status = ['scheduled', 'syncing', 'complete', 'error'].includes(sync.state) ? sync.state : 'idle';
+    const status = ['scheduled', 'syncing', 'retrying', 'complete', 'error'].includes(sync.state) ? sync.state : 'idle';
     if (status === 'scheduled') return { status, text: 'Notifications: scheduled', title: 'Notification synchronization is queued.' };
+    if (status === 'retrying') {
+      const downloaded = Number(sync.downloaded ?? sync.offset) || 0;
+      const cached = Number(sync.cached) || 0;
+      const attempt = Number(sync.retryAttempt) || 1;
+      return {
+        status,
+        text: `Notifications: retrying (attempt ${attempt}) · ${downloaded} downloaded · ${cached} applied`,
+        title: sync.error || 'The notification request failed temporarily; retrying the same page until the network is available again.',
+      };
+    }
     if (status === 'syncing') {
       const downloaded = Number(sync.downloaded ?? sync.offset) || 0;
       const cached = Number(sync.cached) || 0;
@@ -2441,7 +2475,7 @@
         const syncDownloaded = Number(syncState.downloaded ?? syncState.offset) || 0;
         const syncCached = Number(syncState.cached) || 0;
         notificationProgress.value = syncTotal > 0 ? Math.min(1, syncDownloaded / syncTotal) : 0;
-        notificationProgress.hidden = syncDisplay.status !== 'syncing';
+        notificationProgress.hidden = !['syncing', 'retrying'].includes(syncDisplay.status);
         notificationProgress.title = syncTotal > 0
           ? `${syncDownloaded}/${syncTotal} notifications downloaded · ${syncCached} applied to cache`
           : 'Downloading notifications…';
@@ -2455,7 +2489,7 @@
         stopSync.className = 'fa-summary-force';
         stopSync.textContent = 'Stop sync';
         stopSync.title = 'Stop the current notification synchronization and cancel its active request.';
-        stopSync.hidden = !['scheduled', 'syncing'].includes(syncDisplay.status);
+        stopSync.hidden = !['scheduled', 'syncing', 'retrying'].includes(syncDisplay.status);
         stopSync.addEventListener('click', event => {
           event.preventDefault();
           event.stopPropagation();
