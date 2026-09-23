@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Fonte Antiga - Universe Overview
 // @namespace    fa.universe-overview
-// @version      2.54.44
+// @version      2.54.46
 // @description  Locally summarize colonies with overview, building, ship, and defense inventory tabs
 // @match        *://fonteantiga.com/*
 // @grant        none
@@ -967,22 +967,19 @@
           const galaxy = Number(event.data.galaxy), system = Number(event.data.system);
           if (!Number.isInteger(galaxy) || galaxy < 1 || !Number.isInteger(system) || system < 1) return;
           (async () => {
-            // goHome() initializes the systems screen and populates its frames;
-            // merely toggling screen-systems leaves a blank, uninitialized view.
-            if (typeof goHome === 'function') await goHome();
-            else if (typeof showScreen === 'function') showScreen('systems');
-            else return;
-            if (typeof setPageTitle === 'function') setPageTitle('Galaxy');
-            if (typeof refreshTopbarPlanets === 'function') refreshTopbarPlanets();
-            const input = document.getElementById('galaxy-nav-system');
-            if (input) input.value = String(system);
-            if (typeof state === 'undefined' || typeof jumpToSystem !== 'function') {
-              if (typeof jumpToGalaxyMapSystem === 'function') jumpToGalaxyMapSystem(system);
-              return;
-            }
-            const previousHome = state.homeSystem;
-            state.homeSystem = { ...(previousHome || {}), galaxy, system };
-            try { await jumpToSystem(); } finally { state.homeSystem = previousHome; }
+            // Galaxy Map and System are separate tabs. The old implementation
+            // opened the systems screen, which either showed the wrong screen
+            // or left an empty tab. Keep the current planet screen and activate
+            // the Galaxy Map tab instead.
+            if (typeof activateTab !== 'function' || typeof refreshHome !== 'function') return;
+            if (typeof state === 'undefined') return;
+            state.viewedSystem = { galaxy, system };
+            state.galaxyMapSelected = { galaxy, system };
+            activateTab('galaxymap');
+            await refreshHome();
+            if (typeof ensureGalaxyMap === 'function') await ensureGalaxyMap();
+            state.galaxyMapSelected = { galaxy, system };
+            if (typeof redrawGalaxyMapIfVisible === 'function') redrawGalaxyMapIfVisible();
           })().catch(() => {});
         });
       })();
@@ -2228,7 +2225,7 @@
           });
           actionInner.appendChild(explore);
         }
-        const galaxy = actionButton(GALAXY_ACTION_ICON, 'Open galaxy system', event => { event.stopPropagation(); closePanel(); openGalaxyForRecord(record); });
+        const galaxy = actionButton(GALAXY_ACTION_ICON, 'Open Galaxy Map at this system', event => { event.stopPropagation(); closePanel(); openGalaxyForRecord(record); });
         actionInner.appendChild(galaxy);
       }
       const nameContent = document.createElement('div'); nameContent.className = 'fa-summary-name-content';
