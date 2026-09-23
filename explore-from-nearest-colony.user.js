@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Fonte Antiga - Explore From Nearest Colony
 // @namespace    fa.galaxy-explore-nearest-colony
-// @version      1.1.5
+// @version      1.1.13
 // @description  Start Galaxy exploration missions from the closest owned colony
 // @match        *://fonteantiga.com/*
 // @grant        none
@@ -41,6 +41,15 @@
         document.addEventListener(${JSON.stringify(ORIGIN_EVENT)}, function (event) {
           var id = Number(event.detail);
           if (!Number.isSafeInteger(id) || typeof state === 'undefined') return;
+          // The native fleet code uses strict Array.includes() checks. Keep
+          // the ID list numeric so a string/number mismatch cannot make it
+          // silently fall back to the first colony.
+          if (Array.isArray(state.ownedPlanetIds)) {
+            state.ownedPlanetIds = state.ownedPlanetIds
+              .map(function (value) { return Number(value); })
+              .filter(function (value) { return Number.isSafeInteger(value) && value > 0; });
+            if (!state.ownedPlanetIds.includes(id)) state.ownedPlanetIds.push(id);
+          }
           state.currentPlanetId = id;
           state.lastPlanetId = id;
           localStorage.setItem('galaxygame_planet', String(id));
@@ -59,6 +68,11 @@
           // dashboard is not refreshed, so restart those loops explicitly.
           if (typeof startTicking === 'function') startTicking();
         });
+        // Expose an awaitable page-context handoff. The native openPlanet()
+        // flow must finish before quickDeployFleet() reads the origin.
+        window.__faExploreNearestOpenPlanet = function (id) {
+          return typeof openPlanet === 'function' ? openPlanet(Number(id)) : Promise.resolve();
+        };
       })();
     `;
     root.appendChild(bridge);
@@ -95,21 +109,21 @@
   }
 
   async function loadGalaxySystems() {
-    // Keep the map for the lifetime of this page. A full page reload starts a
-    // new script instance and therefore picks up a new map automatically.
-    if (mapCache) return mapCache;
+    // The game map is stable for the lifetime of the page. Cache it once and
+    // pick up a fresh map after the next page reload.
+    if (mapCache !== null) return mapCache;
 
-    const fromState = typeof state !== 'undefined' && Array.isArray(state.galaxyMapSystems)
-      ? state.galaxyMapSystems
-      : null;
-    if (fromState && fromState.length > 0) {
-      mapCache = fromState;
-      return mapCache;
+    let systems = [];
+    if (typeof state !== 'undefined' && Array.isArray(state.galaxyMapSystems)
+      && state.galaxyMapSystems.length > 0) {
+      systems = state.galaxyMapSystems;
+    } else if (typeof window.req === 'function') {
+      try {
+        const response = await window.req('GET', '/universe/map');
+        systems = response && Array.isArray(response.body) ? response.body : [];
+      } catch (_) {}
     }
 
-    if (typeof window.req !== 'function') return [];
-    const response = await window.req('GET', '/universe/map');
-    const systems = response && Array.isArray(response.body) ? response.body : [];
     mapCache = systems;
     mapCoordinates = new Map();
     systems.forEach(item => {
@@ -150,26 +164,28 @@
 
     if (sourceSystem === null || targetSystem === null) return Infinity;
 
-    // System coordinates reflect the actual galaxy layout. Planet position is
-    // only used to break ties inside one system, where it is the useful part
-    // of the distance.
+    // The Galaxy Map's x/y coordinates define the spatial layout of systems.
+    // Use Euclidean distance between those coordinates, then use planet
+    // position only to break ties within/near the same system.
     const sourcePoint = systemCoordinates(systems, sourceGalaxy, sourceSystem);
     const targetPoint = systemCoordinates(systems, targetGalaxy, targetSystem);
     if (sourcePoint && targetPoint && sourceGalaxy === targetGalaxy) {
-      const systemDistance = Math.hypot(sourcePoint.x - targetPoint.x, sourcePoint.y - targetPoint.y);
-      return systemDistance + Math.abs(sourcePosition - targetPosition) * 1e-6;
+      return Math.hypot(sourcePoint.x - targetPoint.x, sourcePoint.y - targetPoint.y)
+        + Math.abs(sourcePosition - targetPosition) * 1e-6;
     }
 
-    // The game currently deploys Galaxy 1 destinations. This fallback also
-    // keeps the script useful if the map endpoint is unavailable.
-    const galaxyDistance = Math.abs(sourceGalaxy - targetGalaxy) * 1e6;
-    return galaxyDistance + Math.abs(sourceSystem - targetSystem)
+    // If map data is unavailable, retain a deterministic fallback rather than
+    // treating every colony as equally distant.
+    const galaxyDistance = Math.abs(sourceGalaxy - targetGalaxy) * 1e9;
+    return galaxyDistance
+      + Math.abs(sourceSystem - targetSystem)
       + Math.abs(sourcePosition - targetPosition) * 1e-6;
   }
 
   async function findNearestColony(destSystem, destPosition) {
     const [planets, systems] = await Promise.all([loadOwnedPlanets(), loadGalaxySystems()]);
-    const target = { galaxy: 1, system: numeric(destSystem), position: numeric(destPosition) };
+    const viewedGalaxy = typeof state !== 'undefined' ? numeric(state.viewedSystem?.galaxy) : null;
+    const target = { galaxy: viewedGalaxy ?? 1, system: numeric(destSystem), position: numeric(destPosition) };
     if (target.system === null || target.position === null || planets.length === 0) return null;
 
     let nearest = null;
@@ -194,13 +210,15 @@
       try {
         const nearest = await findNearestColony(destSystem, destPosition);
         if (nearest && setFleetOrigin(nearest.id)) {
-          // quickDeployFleet normally calls openPlanet() when the selected
-          // origin differs from the current one. The page-context bridge sets
-          // the origin directly without running the overview refresh, so the
-          // next native action is the Fleet tab itself.
-          // Keep fuel/resource calculations correct without showing the
-          // dashboard first.
-          if (typeof window.syncResources === 'function') await window.syncResources();
+          // Complete the game's normal origin switch before the native fleet
+          // function reads state.currentPlanetId. The previous bridge only
+          // changed state synchronously, so openPlanet() could later restore
+          // the old colony and the fleet launched from the wrong origin.
+          if (typeof window.__faExploreNearestOpenPlanet === 'function') {
+            await window.__faExploreNearestOpenPlanet(nearest.id);
+          } else if (typeof window.syncResources === 'function') {
+            await window.syncResources();
+          }
         }
       } catch (_) {
         // Fall through to the game's normal origin-selection behavior.
