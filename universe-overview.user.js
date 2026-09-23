@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Fonte Antiga - Universe Overview
 // @namespace    fa.universe-overview
-// @version      2.54.41
+// @version      2.54.42
 // @description  Locally summarize colonies with overview, building, ship, and defense inventory tabs
 // @match        *://fonteantiga.com/*
 // @grant        none
@@ -448,7 +448,13 @@
       const execute = async () => {
         if (navigator.locks && typeof navigator.locks.request === 'function') {
           return navigator.locks.request('fa.notifications.sync', { ifAvailable: true }, lock => {
-            if (!lock) return undefined;
+            if (!lock) {
+              // Another tab may still be finishing a request from a previous
+              // page instance. Do not silently go idle: that leaves the
+              // persisted `syncing` marker looking frozen after reload.
+              scheduleSync(2000);
+              return undefined;
+            }
             return runSync();
           });
         }

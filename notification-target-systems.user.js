@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Fonte Antiga - Notification Target Systems
 // @namespace    fa.notifications-target-systems
-// @version      1.6.16
+// @version      1.6.17
 // @description  Cache notifications locally and mark their target systems on the galaxy map
 // @match        *://fonteantiga.com/*
 // @grant        none
@@ -381,7 +381,13 @@
       const execute = async () => {
         if (navigator.locks && typeof navigator.locks.request === 'function') {
           return navigator.locks.request('fa.notifications.sync', { ifAvailable: true }, lock => {
-            if (!lock) return undefined;
+            if (!lock) {
+              // Another tab may still be finishing a request from a previous
+              // page instance. Do not silently go idle: that leaves the
+              // persisted `syncing` marker looking frozen after reload.
+              scheduleSync(2000);
+              return undefined;
+            }
             return runSync();
           });
         }
