@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Fonte Antiga - Universe Overview
 // @namespace    fa.universe-overview
-// @version      2.54.42
+// @version      2.54.43
 // @description  Locally summarize colonies with overview, building, ship, and defense inventory tabs
 // @match        *://fonteantiga.com/*
 // @grant        none
@@ -135,7 +135,7 @@
     let stopRequested = false;
     let activeController = null;
     let lastUnread = null;
-    let syncState = { state: 'idle', offset: 0, total: 0, cached: 0, error: '' };
+    let syncState = { state: 'idle', offset: 0, total: 0, downloaded: 0, cached: 0, error: '' };
     let announceTimer = null;
     let knownIds = null;
     const pendingAnnouncements = new Map();
@@ -363,7 +363,7 @@
         const seenThisRun = new Set();
         let downloaded = 0;
         let cachedCount = knownIds.size;
-        setSyncState('syncing', { offset: 0, total: force ? cachedCount : 0, cached: force ? 0 : cachedCount, force, error: '' });
+        setSyncState('syncing', { offset: 0, total: force ? cachedCount : 0, downloaded: 0, cached: force ? 0 : cachedCount, force, error: '' });
         // A completed sync can stop at an ID that was already persisted before
         // this run. An interrupted sync must first reach its committed checkpoint;
         // cached IDs before that checkpoint are not safe stopping boundaries.
@@ -375,7 +375,7 @@
         let current = await page(0);
         const syncTotal = force ? Math.max(cachedCount, current.total) : current.total;
         let previousTotal = current.total;
-        setSyncState('syncing', { offset: 0, total: syncTotal, cached: force ? 0 : cachedCount });
+        setSyncState('syncing', { offset: 0, total: syncTotal, downloaded: 0, cached: force ? 0 : cachedCount });
         // Clear only a completed run's marker. An interrupted run retains its
         // committed checkpoint until this run reaches and replaces it.
         await saveMeta(db, {
@@ -431,7 +431,8 @@
           setSyncState('syncing', {
             offset,
             total: syncTotal,
-            cached: force ? downloaded : cachedCount,
+            downloaded: offset,
+            cached: cachedCount,
           });
           // Force mode cannot rely on a possibly stale/missing total. Keep
           // paging while the API returns full pages and stop only on a short
@@ -441,7 +442,7 @@
           current = await page(offset);
         }
         await saveMeta(db, { status: 'complete', total: syncTotal, cached: cachedCount, nextOffset: offset, updatedAt: new Date().toISOString() });
-        setSyncState('complete', { offset, total: syncTotal, cached: cachedCount, force: false, error: '' });
+        setSyncState('complete', { offset, total: syncTotal, downloaded: offset, cached: cachedCount, force: false, error: '' });
         announce();
         return true;
       };
@@ -2339,9 +2340,16 @@
     const status = ['scheduled', 'syncing', 'complete', 'error'].includes(sync.state) ? sync.state : 'idle';
     if (status === 'scheduled') return { status, text: 'Notifications: scheduled', title: 'Notification synchronization is queued.' };
     if (status === 'syncing') {
-      const downloaded = Number(sync.cached) || 0;
-      const progress = sync.total > 0 ? ` ${downloaded}/${sync.total}` : ' …';
-      return { status, text: `Notifications: syncing${progress}`, title: sync.force ? 'A full notification resynchronization is in progress.' : 'Notification history is being synchronized in the background.' };
+      const downloaded = Number(sync.downloaded ?? sync.offset) || 0;
+      const cached = Number(sync.cached) || 0;
+      const progress = sync.total > 0 ? ` ${downloaded}/${sync.total} downloaded` : ' … downloading';
+      return {
+        status,
+        text: `Notifications: syncing${progress} · ${cached} applied`,
+        title: sync.force
+          ? `A full notification resynchronization is in progress. ${downloaded} notification entries have been downloaded and ${cached} notifications are applied to the local cache.`
+          : `Notification history is being synchronized in the background. ${downloaded} notifications have been downloaded and ${cached} are applied to the local cache.`,
+      };
     }
     if (status === 'complete') return { status, text: `Notifications: synced${sync.cached != null ? ` · ${sync.cached} cached` : ''}`, title: 'Notification cache is synchronized.' };
     if (status === 'error') return { status, text: 'Notifications: sync error', title: sync.error || 'Notification synchronization failed.' };
@@ -2430,10 +2438,13 @@
         notificationProgress.max = 1;
         const syncState = state.notificationSync || {};
         const syncTotal = Number(syncState.total) || 0;
-        const syncDownloaded = Number(syncState.cached) || 0;
+        const syncDownloaded = Number(syncState.downloaded ?? syncState.offset) || 0;
+        const syncCached = Number(syncState.cached) || 0;
         notificationProgress.value = syncTotal > 0 ? Math.min(1, syncDownloaded / syncTotal) : 0;
         notificationProgress.hidden = syncDisplay.status !== 'syncing';
-        notificationProgress.title = syncTotal > 0 ? `${syncDownloaded}/${syncTotal} notifications downloaded` : 'Downloading notifications…';
+        notificationProgress.title = syncTotal > 0
+          ? `${syncDownloaded}/${syncTotal} notifications downloaded · ${syncCached} applied to cache`
+          : 'Downloading notifications…';
         const syncDropdown = document.createElement('details');
         syncDropdown.className = `fa-summary-sync-state fa-summary-sync-${syncDisplay.status}`;
         const syncLabel = document.createElement('summary');
