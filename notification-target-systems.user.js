@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Fonte Antiga - Notification Target Systems
 // @namespace    fa.notifications-target-systems
-// @version      1.6.19
+// @version      1.6.20
 // @description  Cache notifications locally and mark their target systems on the galaxy map
 // @match        *://fonteantiga.com/*
 // @grant        none
@@ -55,7 +55,7 @@
     const STORE = 'notifications';
     const META = 'metadata';
     const META_KEY = 'sync';
-    const PAGE_SIZE = 10;
+    const PAGE_SIZE = 25;
     const PAGE_DELAY = 2000;
     const PAGE_TIMEOUT = 30000;
     const PAGE_RETRY_DELAYS = [2000, 5000, 10000, 20000, 30000];
