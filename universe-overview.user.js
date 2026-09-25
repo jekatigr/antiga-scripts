@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Fonte Antiga - Universe Overview
 // @namespace    fa.universe-overview
-// @version      2.54.47
-// @description  Locally summarize colonies with overview, building, ship, and defense inventory tabs
+// @version      2.54.51
+// @description  Universe overview, notification intelligence, and Galaxy map markers
 // @match        *://fonteantiga.com/*
 // @grant        none
 // @run-at       document-start
@@ -106,8 +106,8 @@
     renderInventoryCatalog: null,
   };
 
-  // Shared notification-cache service. This intentionally lives in every
-  // notification consumer so either script works when installed alone.
+  // Shared notification-cache service owned by the Universe script. It keeps
+  // notification history available to both the overview and Galaxy markers.
   (function startNotificationCacheService() {
     const SERVICE_KEY = '__faNotificationCacheService';
     const SERVICE_VERSION = 5;
@@ -577,9 +577,9 @@
     .planet-sidebar-title { display: flex; align-items: center; justify-content: space-between; gap: .5rem; }
     .fa-summary-sidebar-btn { flex: 0 0 auto; margin: 0; padding: .35rem .65rem; white-space: nowrap; }
     body.fa-summary-modal-open { overflow: hidden !important; }
-    .fa-summary-overlay { position: fixed; inset: 0; z-index: 10000; display: flex; justify-content: center; align-items: flex-start; padding: 1vh .5vw; background: rgba(0,0,0,.7); overscroll-behavior: contain; }
+    .fa-summary-overlay { position: fixed; inset: 0; z-index: 10000; display: flex; justify-content: center; align-items: flex-start; box-sizing: border-box; width: 100%; height: 100vh; height: 100dvh; padding: 1vh .5vw; background: rgba(0,0,0,.7); overscroll-behavior: contain; }
     .fa-summary-overlay.hidden { display: none; }
-    .fa-summary-dialog { display: flex; flex-direction: column; width: min(99.5vw, 2400px); max-height: 98vh; overflow: hidden; overscroll-behavior: contain; color: var(--fg); background: var(--bg, #0a0d13); border: 1px solid var(--border-soft); box-shadow: 0 1rem 3rem rgba(0,0,0,.5); }
+    .fa-summary-dialog { display: flex; flex: 0 1 auto; flex-direction: column; width: min(99.5vw, 2400px); min-height: 0; max-height: calc(100vh - 2vh); max-height: calc(100dvh - 2vh); overflow: hidden; overscroll-behavior: contain; color: var(--fg); background: var(--bg, #0a0d13); border: 1px solid var(--border-soft); box-shadow: 0 1rem 3rem rgba(0,0,0,.5); }
 
     .fa-summary-header { display: flex; align-items: center; justify-content: space-between; gap: .75rem; padding: .8rem 1rem; border-bottom: 1px solid var(--border-soft); }
     .fa-summary-header h2 { margin: 0; font-size: 1.1rem; }
@@ -656,7 +656,7 @@
     .fa-summary-sync-complete { color: #9be37a; }
     .fa-summary-sync-error { color: #ff8d8d; }
 
-    .fa-summary-table-wrap { overflow: auto; overscroll-behavior: contain; container-type: inline-size; }
+    .fa-summary-table-wrap { flex: 1 1 auto; min-height: 0; overflow: auto; -webkit-overflow-scrolling: touch; overscroll-behavior: contain; container-type: inline-size; }
     /* Space the explored-result status from the table header without adding
        padding inside the scrollable table itself. */
     .fa-summary-overlay.fa-summary-showing-explored .fa-summary-status { margin-bottom: .5rem; }
@@ -1313,6 +1313,18 @@
     }
     return result;
   }
+  const TECHNICAL_DEFENDER_ID = '00000000-0000-0000-0000-000000000001';
+  function battleReportIndicatesOccupied(notification) {
+    if (String(notification?.notification_type || '').toLowerCase() !== 'battle_report') return false;
+    const battle = notification?.battle;
+    if (!battle) return false;
+    const originSystem = Number(battle.origin_system);
+    const originPosition = Number(battle.origin_position);
+    if (!Number.isSafeInteger(originSystem) || originSystem < 1) return false;
+    if (!Number.isSafeInteger(originPosition) || originPosition < 1) return false;
+    const defenderPlayerId = String(battle.defender_player_id || '').toLowerCase();
+    return Boolean(defenderPlayerId) && defenderPlayerId !== TECHNICAL_DEFENDER_ID;
+  }
   function notificationType(notification) {
     const value = String(notification?.notification_type || '').toLowerCase();
     if (value === 'exploration') return 'exploration';
@@ -1365,6 +1377,7 @@
         explorationAt: null,
         explorationLost: false,
         explorationLostAt: null,
+        occupiedBattleAt: null,
         scanRepelled: false,
         scanRepelledAt: null,
         // Feature reports are monotonic: a later report may omit a feature,
@@ -1386,6 +1399,10 @@
     if (type === 'exploration_lost') {
       entry.explorationLost = true;
       if (!entry.explorationLostAt || new Date(entry.explorationLostAt).getTime() < new Date(date).getTime()) entry.explorationLostAt = date;
+    }
+    if (battleReportIndicatesOccupied(notification)
+      && (!entry.occupiedBattleAt || new Date(entry.occupiedBattleAt).getTime() < new Date(date).getTime())) {
+      entry.occupiedBattleAt = date;
     }
     if (notification.notification_type === 'scan_repelled') {
       entry.scanRepelled = true;
@@ -1602,20 +1619,17 @@
     const base = latestBase(record);
     if (record.owned === true) return { value: 'Owned', date: stampFor(record, 'base') };
     const explorationAt = notification?.explorationAt;
-    const lostAt = notification?.explorationLostAt || notification?.scanRepelledAt;
-    // A failed exploration is an occupied signal, but it must not override a
-    // later successful report. This matters when a planet was occupied in the
-    // past, then abandoned and successfully explored afterward.
-    const successfulExploration = notification?.exploration
-      && typeof notification.exploration.is_occupied === 'boolean'
-      && (!lostAt || !explorationAt || new Date(explorationAt).getTime() >= new Date(lostAt).getTime());
-    // Once the live sidebar no longer identifies this as owned, an old
-    // private `/planets/:id` snapshot must not keep the abandoned planet
-    // marked Occupied. The exploration report is the applicable public state.
-    if (record.owned !== true && successfulExploration) {
-      return { value: notification.exploration.is_occupied ? 'Occupied' : 'Unoccupied', date: explorationAt };
+    const battleAt = notification?.occupiedBattleAt;
+    const exploration = notification?.exploration;
+    // Failed explorations and battles against technical/PvE defenders do not
+    // change occupation. A successful exploration is authoritative until a
+    // later real-player battle proves an attack reached the planet.
+    if (exploration && typeof exploration.is_occupied === 'boolean'
+      && (!battleAt || new Date(explorationAt || 0).getTime() >= new Date(battleAt).getTime())) {
+      return { value: exploration.is_occupied ? 'Occupied' : 'Unoccupied', date: explorationAt };
     }
-    if (notification?.explorationLost || notification?.scanRepelled) return { value: 'Occupied', date: null };
+    if (battleAt) return { value: 'Occupied', date: battleAt };
+    if (notification?.explorationLost || notification?.scanRepelled) return { value: '?', date: null };
     if (base.claimed === true) return { value: 'Occupied', date: stampFor(record, 'base') };
     if (base.claimed === false) return { value: 'Unoccupied', date: stampFor(record, 'base') };
     if (notification?.exploration && typeof notification.exploration.is_occupied === 'boolean') return { value: notification.exploration.is_occupied ? 'Occupied' : 'Unoccupied', date: explorationAt };
@@ -2590,8 +2604,8 @@
   const FILTER_ICON = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path fill="currentColor" d="M3 5a1 1 0 0 1 1-1h16a1 1 0 0 1 .8 1.6L15 13.333V19a1 1 0 0 1-.553.894l-4 2A1 1 0 0 1 9 19v-5.667L3.2 5.6A1 1 0 0 1 3 5Z"/></svg>';
   function filterOptions(columnKey) {
     if (columnKey === 'status') return state.view === 'explored'
-      ? [['Occupied', 'Occupied'], ['Unoccupied', 'Unoccupied']]
-      : [['Owned', 'Owned'], ['Occupied', 'Occupied'], ['Unoccupied', 'Unoccupied']];
+      ? [['Occupied', 'Occupied'], ['Unoccupied', 'Unoccupied'], ['?', 'Unknown']]
+      : [['Owned', 'Owned'], ['Occupied', 'Occupied'], ['Unoccupied', 'Unoccupied'], ['?', 'Unknown']];
     if (columnKey === 'features') return [['relic', 'Relic'], ['stellar', 'Stellar'], ['both', 'Both relic + stellar'], ['none', 'None'], ['unknown', 'Unknown']];
     return [];
   }
@@ -2817,7 +2831,7 @@
         button = document.createElement('button');
         button.type = 'button';
         button.className = 'fa-summary-sidebar-btn';
-        button.textContent = 'Overview';
+        button.textContent = 'Universe';
         button.title = 'Open universe overview';
         button.addEventListener('click', openPanel);
       }
@@ -2894,13 +2908,610 @@
       });
       bootstrapObserver.observe(document.body, { childList: true, subtree: true });
     }
-    // `fa-target-system-markers-changed` only means that the map's visible
-    // filter changed. It is not a notification-cache update; loading the
-    // full cache here freezes the page for players with a large exploration
-    // history. Actual cache changes are handled above via
-    // `fa-notifications-updated` / BroadcastChannel and are coalesced.
+    // Map filter changes only affect the visible Galaxy map. They are not
+    // notification-cache updates; loading the full cache here freezes the
+    // page for players with a large exploration history. Actual cache changes
+    // are handled above via `fa-notifications-updated` / BroadcastChannel and
+    // are coalesced.
     observeDom();
   }
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', start, { once: true });
   else start();
+
+  // Integrated notification target-system map markers. The notification
+  // cache service above is the single owner of the shared cache.
+  (function installNotificationTargetSystems() {
+  const TYPES_STORAGE_KEY = 'fa.target-system-types';
+  const MAP_CHANGED_EVENT = 'fa-target-system-markers-changed';
+  const MARKS_CACHE_KEY = 'fa.target-system-marks-cache-v3';
+  const MARK_COLOR = '#b7ff00';
+  const FILTER_ICON_HTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 5h18l-7 8v5l-4 2v-7L3 5z" fill="currentColor"></path></svg>';
+  const NOTIFICATION_TYPES = [
+    { key: 'exploration', label: 'Planet exploration' },
+    { key: 'system_exploration', label: 'System exploration' },
+    { key: 'expedition', label: 'Expedition' },
+    { key: 'occupied', label: 'Occupied' },
+    { key: 'attack', label: 'Attack' },
+    { key: 'transport', label: 'Transport' },
+    { key: 'harvest', label: 'Harvest' },
+    { key: 'other', label: 'Other' },
+  ];
+  const TYPE_KEYS = new Set(NOTIFICATION_TYPES.map(type => type.key));
+  const ALL_TYPE_KEYS = NOTIFICATION_TYPES.map(type => type.key);
+  const style = document.createElement('style');
+  style.textContent = `
+    :root {
+      --fa-target-system-color: ${MARK_COLOR};
+    }
+    .fa-target-filter {
+      position: relative;
+      display: block;
+    }
+    .fa-target-filter > summary {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      box-sizing: border-box;
+      width: 2rem;
+      height: 2rem;
+      padding: 0;
+      margin: 0;
+      cursor: pointer;
+      list-style: none;
+      text-align: center;
+      white-space: nowrap;
+      background: var(--panel-alt);
+    }
+    .fa-target-filter > summary::-webkit-details-marker {
+      display: none;
+    }
+    .fa-target-filter-panel {
+      position: absolute;
+      z-index: 20;
+      top: calc(100% + 0.35rem);
+      right: 0;
+      min-width: 12rem;
+      padding: 0.65rem;
+      border: 1px solid var(--border-soft);
+      background: var(--panel-alt);
+      box-shadow: 0 0.4rem 1rem rgba(0, 0, 0, 0.35);
+    }
+    .fa-target-filter-option {
+      display: grid;
+      grid-template-columns: 1.1rem minmax(0, 1fr);
+      align-items: center;
+      column-gap: 0.5rem;
+      width: 100%;
+      box-sizing: border-box;
+      padding: 0.2rem 0;
+      text-align: left;
+      white-space: nowrap;
+    }
+    .fa-target-filter-option input {
+      width: 1rem;
+      height: 1rem;
+      margin: 0;
+      justify-self: start;
+      accent-color: var(--fa-target-system-color);
+    }
+    .fa-target-filter-option span {
+      text-align: left;
+    }
+    .fa-target-filter-summary svg {
+      width: 1.1em;
+      height: 1.1em;
+      vertical-align: -0.15em;
+    }
+    .fa-target-filter-actions {
+      display: flex;
+      gap: 0.35rem;
+      margin-top: 0.55rem;
+      padding-top: 0.55rem;
+      border-top: 1px solid var(--border-soft);
+    }
+    .fa-target-filter-actions button {
+      flex: 1;
+      white-space: nowrap;
+    }
+    .fa-target-map-legend {
+      color: var(--fa-target-system-color);
+    }
+    .fa-target-overlay-canvas {
+      position: absolute;
+      z-index: 1;
+      pointer-events: none;
+    }
+  `;
+  try {
+    localStorage.removeItem('fa.target-system-marks');
+    localStorage.removeItem('fa.target-systems');
+  } catch (_) {}
+
+  const appendStyle = () => (document.head || document.documentElement)?.appendChild(style);
+  if (document.head) appendStyle();
+  else document.addEventListener('DOMContentLoaded', appendStyle, { once: true });
+
+  function readStorage(key, fallback) {
+    try {
+      const raw = localStorage.getItem(key);
+      return raw == null ? fallback : JSON.parse(raw);
+    } catch (_) {
+      return fallback;
+    }
+  }
+
+  function saveStorage(key, value) {
+    try {
+      localStorage.setItem(key, JSON.stringify(value));
+    } catch (_) {
+      // Keep the feature usable for sessions where storage is unavailable.
+    }
+  }
+
+  function loadSelectedTypes() {
+    const value = readStorage(TYPES_STORAGE_KEY, null);
+    if (!Array.isArray(value)) return new Set(ALL_TYPE_KEYS);
+    const selected = new Set(value.filter(type => TYPE_KEYS.has(type)));
+    // Preserve the previous Exploration selection when upgrading to the
+    // split Planet/System exploration filters. Persist the migration so the
+    // page-context map hook does not have to infer user preferences repeatedly.
+    if (selected.has('exploration') && !selected.has('system_exploration')) {
+      selected.add('system_exploration');
+      saveStorage(TYPES_STORAGE_KEY, Array.from(selected));
+    }
+    return selected;
+  }
+
+  let selectedTypes = loadSelectedTypes();
+
+  function saveSelectedTypes() {
+    saveStorage(TYPES_STORAGE_KEY, Array.from(selectedTypes));
+  }
+
+  function setSelectedTypes(types) {
+    selectedTypes = new Set(types.filter(type => TYPE_KEYS.has(type)));
+    saveSelectedTypes();
+    syncFilterControls();
+    window.dispatchEvent(new Event(MAP_CHANGED_EVENT));
+  }
+
+  function syncFilterControls() {
+    const filter = document.querySelector('.fa-target-filter');
+    if (!filter) return;
+
+    const summary = filter.querySelector('.fa-target-filter-summary');
+    if (summary) {
+      // Replacing the SVG on every body mutation feeds the observer that
+      // calls this function. Keep the existing icon unless the control was
+      // actually rebuilt.
+      if (!summary.querySelector('svg')) summary.innerHTML = FILTER_ICON_HTML;
+      summary.title = `Notification filters (${selectedTypes.size}/${NOTIFICATION_TYPES.length} selected)`;
+      summary.setAttribute('aria-label', summary.title);
+    }
+
+    filter.querySelectorAll('[data-fa-target-type]').forEach(input => {
+      input.checked = selectedTypes.has(input.dataset.faTargetType);
+    });
+  }
+
+  function createFilterControls() {
+    const details = document.createElement('details');
+    details.className = 'fa-target-filter';
+
+    const summary = document.createElement('summary');
+    summary.className = 'action-btn fa-target-filter-summary';
+    summary.innerHTML = FILTER_ICON_HTML;
+    summary.title = 'Notification filters';
+    summary.setAttribute('aria-label', summary.title);
+    details.appendChild(summary);
+
+    const panel = document.createElement('div');
+    panel.className = 'fa-target-filter-panel';
+    for (const type of NOTIFICATION_TYPES) {
+      const label = document.createElement('label');
+      label.className = 'fa-target-filter-option';
+
+      const input = document.createElement('input');
+      input.type = 'checkbox';
+      input.dataset.faTargetType = type.key;
+      input.addEventListener('change', () => {
+        if (input.checked) selectedTypes.add(type.key);
+        else selectedTypes.delete(type.key);
+        saveSelectedTypes();
+        syncFilterControls();
+        window.dispatchEvent(new Event(MAP_CHANGED_EVENT));
+      });
+
+      const text = document.createElement('span');
+      text.textContent = type.label;
+      label.append(input, text);
+      panel.appendChild(label);
+    }
+
+    const actions = document.createElement('div');
+    actions.className = 'fa-target-filter-actions';
+
+    const selectAll = document.createElement('button');
+    selectAll.type = 'button';
+    selectAll.className = 'action-btn';
+    selectAll.textContent = 'Select all';
+    selectAll.addEventListener('click', () => setSelectedTypes(ALL_TYPE_KEYS));
+
+    const clearAll = document.createElement('button');
+    clearAll.type = 'button';
+    clearAll.className = 'action-btn';
+    clearAll.textContent = 'Clear all';
+    clearAll.addEventListener('click', () => setSelectedTypes([]));
+
+    actions.append(selectAll, clearAll);
+    panel.appendChild(actions);
+
+    details.appendChild(panel);
+    return details;
+  }
+
+  function matchFilterButtonHeight(mapControls) {
+    const summary = mapControls.querySelector('.fa-target-filter-summary');
+    const control = mapControls.querySelector('.nav-arrow');
+    const height = control?.getBoundingClientRect().height;
+    if (summary && Number.isFinite(height) && height > 0) summary.style.height = `${height}px`;
+  }
+
+  function ensureMapControls() {
+    const frame = document.getElementById('galaxy-map-frame');
+    const mapControls = frame && frame.querySelector('.galaxy-map-controls');
+    if (!frame || !mapControls) return;
+
+    // Remove controls from the previous layout if the script is updated while
+    // the game page remains open. The filter and clear action now live only in
+    // the map-control dropdown.
+    frame.querySelectorAll('.fa-target-controls, .fa-target-header-clear').forEach(legacy => legacy.remove());
+
+    if (!mapControls.querySelector('.fa-target-filter')) {
+      mapControls.appendChild(createFilterControls());
+    }
+
+    matchFilterButtonHeight(mapControls);
+    syncFilterControls();
+  }
+
+  function injectMapHook() {
+    const pageScript = document.createElement('script');
+    pageScript.textContent = `
+      (function () {
+        'use strict';
+        const DB_NAME = 'fa.notifications';
+        const DB_VERSION = 1;
+        const STORE_NAME = 'notifications';
+        const TYPES = new Set(${JSON.stringify(['exploration', 'system_exploration', 'expedition', 'occupied', 'attack', 'transport', 'harvest', 'other'])});
+        const EVENT_NAME = 'fa-target-system-markers-changed';
+        const RADII = { small: 2.6, mid: 3.4, large: 4.4 };
+        let targetMarks = [];
+        let marksByType = new Map();
+        let marksLoaded = false;
+        let marksLoadPromise = null;
+        let redrawFrame = null;
+        let systemsScreenWasVisible = false;
+        let mapWasVisible = false;
+
+        function requestResult(request) {
+          return new Promise((resolve, reject) => {
+            request.onsuccess = () => resolve(request.result);
+            request.onerror = () => reject(request.error || new Error('IndexedDB request failed.'));
+          });
+        }
+        const TECHNICAL_DEFENDER_ID = '00000000-0000-0000-0000-000000000001';
+        function battleReportIndicatesOccupied(notification) {
+          if (String(notification?.notification_type || '').toLowerCase() !== 'battle_report') return false;
+          const battle = notification?.battle;
+          if (!battle) return false;
+          const originSystem = Number(battle.origin_system);
+          const originPosition = Number(battle.origin_position);
+          if (!Number.isSafeInteger(originSystem) || originSystem < 1) return false;
+          if (!Number.isSafeInteger(originPosition) || originPosition < 1) return false;
+          const defenderPlayerId = String(battle.defender_player_id || '').toLowerCase();
+          return Boolean(defenderPlayerId) && defenderPlayerId !== TECHNICAL_DEFENDER_ID;
+        }
+        function notificationType(notification) {
+          const notificationType = String(notification && notification.notification_type || '').toLowerCase();
+          const missionType = String(notification && notification.mission_type || '').toLowerCase();
+          if (notificationType === 'expedition_lost') return null;
+          if (notificationType === 'expedition_returned' || (missionType === 'expedition' && notificationType !== 'expedition_lost')) return 'expedition';
+          if (notificationType === 'exploration' || missionType === 'explore') return Array.isArray(notification?.exploration?.system_scan) ? 'system_exploration' : 'exploration';
+          if (notificationType.includes('attack') || notificationType.includes('battle') || notificationType === 'planet_scanned' || missionType === 'attack') return 'attack';
+          if (notificationType.includes('harvest') || missionType === 'harvest') return 'harvest';
+          if (notificationType.includes('trade') || missionType === 'trade') return 'other';
+          if (notificationType.includes('transport') || missionType === 'transport') return 'transport';
+          return 'other';
+        }
+        async function readNotificationSignature() {
+          if (!window.indexedDB) return null;
+          return new Promise((resolve, reject) => {
+            const request = indexedDB.open(DB_NAME, DB_VERSION);
+            request.onupgradeneeded = event => {
+              const db = event.target.result;
+              if (!db.objectStoreNames.contains(STORE_NAME)) event.target.transaction.abort();
+            };
+            request.onsuccess = () => {
+              const db = request.result;
+              if (!db.objectStoreNames.contains(STORE_NAME)) { db.close(); resolve(null); return; }
+              const store = db.transaction(STORE_NAME, 'readonly').objectStore(STORE_NAME);
+              const countRequest = store.count();
+              const newestRequest = store.indexNames.contains('created_at')
+                ? store.index('created_at').openCursor(null, 'prev') : null;
+              let count;
+              let newest;
+              let countReady = false, newestReady = !newestRequest;
+              countRequest.onsuccess = () => { count = countRequest.result; countReady = true; maybeResolve(); };
+              if (newestRequest) {
+                newestRequest.onsuccess = () => { newest = newestRequest.result?.value; newestReady = true; maybeResolve(); };
+                newestRequest.onerror = () => finish(newestRequest.error);
+              }
+              function maybeResolve() { if (countReady && newestReady) finish(); }
+              function finish(error) { db.close(); if (error) reject(error); else resolve(String(count) + ':' + String(newest?.id ?? '') + ':' + String(newest?.created_at ?? '')); }
+            };
+            request.onerror = () => reject(request.error || new Error('Could not open notification cache.'));
+          });
+        }
+        async function readNotificationMarks() {
+          if (!window.indexedDB) return [];
+          if (indexedDB.databases) {
+            const databases = await indexedDB.databases();
+            if (!databases.some(database => database.name === DB_NAME)) return [];
+          }
+          const notifications = await new Promise((resolve, reject) => {
+            const request = indexedDB.open(DB_NAME, DB_VERSION);
+            request.onupgradeneeded = event => {
+              const db = event.target.result;
+              if (!db.objectStoreNames.contains(STORE_NAME)) event.target.transaction.abort();
+            };
+            request.onsuccess = () => {
+              const db = request.result;
+              if (!db.objectStoreNames.contains(STORE_NAME)) { db.close(); resolve([]); return; }
+              const read = db.transaction(STORE_NAME, 'readonly').objectStore(STORE_NAME).getAll();
+              read.onsuccess = () => { db.close(); resolve(read.result || []); };
+              read.onerror = () => { db.close(); reject(read.error || new Error('Could not read notifications.')); };
+            };
+            request.onerror = () => reject(request.error || new Error('Could not open notification cache.'));
+          });
+          const seen = new Set();
+          const marks = [];
+          for (const notification of notifications) {
+            const system = Number(notification && notification.destination_system);
+            if (!Number.isSafeInteger(system) || system < 1) continue;
+            const type = notificationType(notification);
+            if (!type) continue;
+            const types = [type];
+            const occupied = notification && (
+              notification.exploration?.is_occupied === true
+              || notification.exploration?.system_scan?.some(planet => planet?.is_occupied === true)
+              || notification.notification_type === 'planet_scanned'
+              || battleReportIndicatesOccupied(notification)
+            );
+            if (occupied) types.push('occupied');
+            for (const markType of types) {
+              const key = system + ':' + markType;
+              if (seen.has(key)) continue;
+              seen.add(key);
+              marks.push({ system, type: markType });
+            }
+          }
+          return marks;
+        }
+        async function loadMarksForVisibleMap() {
+          if (marksLoadPromise) return marksLoadPromise;
+          marksLoadPromise = (async () => {
+            const signature = await readNotificationSignature();
+            let cached = null;
+            try { cached = JSON.parse(localStorage.getItem('${MARKS_CACHE_KEY}') || 'null'); } catch (_) {}
+            const marks = cached && cached.signature === signature
+              ? cached.marks
+              : await readNotificationMarks();
+            if (!cached || cached.signature !== signature) {
+              try { localStorage.setItem('${MARKS_CACHE_KEY}', JSON.stringify({ signature, marks })); } catch (_) {}
+            }
+            targetMarks = Array.isArray(marks) ? marks : [];
+            marksByType = new Map();
+            for (const mark of targetMarks) {
+              if (!marksByType.has(mark.type)) marksByType.set(mark.type, new Set());
+              marksByType.get(mark.type).add(Number(mark.system));
+            }
+            marksLoaded = true;
+            scheduleRedraw();
+            return targetMarks;
+          })().catch(() => {
+            marksLoaded = true;
+            targetMarks = [];
+            return [];
+          }).finally(() => { marksLoadPromise = null; });
+          return marksLoadPromise;
+        }
+        function readSelectedTypes() {
+          try {
+            const value = JSON.parse(localStorage.getItem('${TYPES_STORAGE_KEY}') || 'null');
+            if (!Array.isArray(value)) return new Set(TYPES);
+            return new Set(value.filter(type => TYPES.has(type)));
+          } catch (_) {
+            return new Set(TYPES);
+          }
+        }
+        function getTargetOverlay(sourceCanvas) {
+          const wrap = sourceCanvas.parentElement;
+          if (!wrap) return null;
+          let overlay = wrap.querySelector('.fa-target-overlay-canvas');
+          if (!overlay) {
+            overlay = document.createElement('canvas');
+            overlay.className = 'fa-target-overlay-canvas';
+            sourceCanvas.insertAdjacentElement('afterend', overlay);
+          }
+          const sourceRect = sourceCanvas.getBoundingClientRect();
+          const wrapRect = wrap.getBoundingClientRect();
+          overlay.style.left = (sourceRect.left - wrapRect.left) + 'px';
+          overlay.style.top = (sourceRect.top - wrapRect.top) + 'px';
+          overlay.style.width = sourceRect.width + 'px';
+          overlay.style.height = sourceRect.height + 'px';
+          if (overlay.width !== sourceCanvas.width) overlay.width = sourceCanvas.width;
+          if (overlay.height !== sourceCanvas.height) overlay.height = sourceCanvas.height;
+          return overlay;
+        }
+        function mapIsVisible() {
+          const body = document.getElementById('galaxy-map-body');
+          return !!body && !body.classList.contains('hidden');
+        }
+        function observeMapVisibility() {
+          const systemsScreen = document.getElementById('screen-systems');
+          const systemsVisible = !!systemsScreen && !systemsScreen.classList.contains('hidden');
+          const visible = mapIsVisible();
+          // Leaving and returning to the Galaxy tab is a reload trigger even
+          // when the map itself remained expanded in the background.
+          if (systemsVisible && !systemsScreenWasVisible) {
+            marksLoaded = false;
+            loadMarksForVisibleMap();
+          } else if (visible && !mapWasVisible) {
+            marksLoaded = false;
+            loadMarksForVisibleMap();
+          }
+          systemsScreenWasVisible = systemsVisible;
+          mapWasVisible = visible;
+        }
+        function drawTargetSystems() {
+          let points;
+          try { points = state.galaxyMapPoints; } catch (_) { return; }
+          const canvas = document.getElementById('galaxy-map-canvas');
+          if (!canvas || !Array.isArray(points)) return;
+          const overlay = getTargetOverlay(canvas);
+          if (!overlay) return;
+          const ctx = overlay.getContext('2d');
+          ctx.clearRect(0, 0, overlay.width, overlay.height);
+          if (!marksLoaded) return;
+          const selected = readSelectedTypes();
+          const markedSystems = new Set();
+          for (const type of selected) {
+            const systems = marksByType.get(type);
+            if (!systems) continue;
+            systems.forEach(system => markedSystems.add(system));
+          }
+          if (markedSystems.size > 0) {
+            const color = getComputedStyle(document.documentElement).getPropertyValue('--fa-target-system-color').trim() || '#b7ff00';
+            ctx.save();
+            ctx.fillStyle = color;
+            for (const point of points) {
+              if (!markedSystems.has(Number(point.system))) continue;
+              if (!Number.isFinite(point.px) || !Number.isFinite(point.py)) continue;
+              const radius = RADII[point.size] || RADII.small;
+              ctx.beginPath();
+              ctx.arc(point.px, point.py, radius, 0, Math.PI * 2);
+              ctx.fill();
+            }
+            ctx.restore();
+          }
+        }
+        function redraw() {
+          // The base map is already painted by the game (or by the
+          // full-width companion). Repaint only our overlay to avoid a second
+          // expensive canvas render for every filter/resize event.
+          drawTargetSystems();
+        }
+        function scheduleRedraw() {
+          if (redrawFrame !== null) return;
+          redrawFrame = requestAnimationFrame(() => {
+            redrawFrame = null;
+            redraw();
+          });
+        }
+        function install() {
+          const original = window.drawGalaxyMap;
+          if (typeof original !== 'function') return false;
+          if (original.__faTargetSystemsWrapped) return true;
+          function wrappedDrawGalaxyMap() {
+            const result = original.apply(this, arguments);
+            observeMapVisibility();
+            drawTargetSystems();
+            return result;
+          }
+          wrappedDrawGalaxyMap.__faTargetSystemsWrapped = true;
+          window.drawGalaxyMap = wrappedDrawGalaxyMap;
+          observeMapVisibility();
+          drawTargetSystems();
+          return true;
+        }
+        const installDelays = [250, 250, 500, 1000, 2000, 4000, 8000];
+        function tryInstall(attempt = 0) {
+          if (install() || attempt >= installDelays.length) return;
+          window.setTimeout(() => tryInstall(attempt + 1), installDelays[attempt]);
+        }
+        window.addEventListener(EVENT_NAME, scheduleRedraw);
+        window.addEventListener('fa-notifications-updated', () => {
+          marksLoaded = false;
+          if (mapIsVisible()) loadMarksForVisibleMap();
+        });
+        if (typeof BroadcastChannel !== 'undefined') {
+          try {
+            const channel = new BroadcastChannel('fa.notifications');
+            channel.addEventListener('message', event => {
+              if (event.data?.type === 'fa-notifications-updated') {
+                marksLoaded = false;
+                if (mapIsVisible()) loadMarksForVisibleMap();
+              }
+            });
+          } catch (_) {}
+        }
+        const visibilityObserver = new MutationObserver(observeMapVisibility);
+        const visibilityRoot = document.getElementById('screen-systems') || document.documentElement;
+        visibilityObserver.observe(visibilityRoot, { childList: true, subtree: true, attributes: true, attributeFilter: ['class'] });
+        tryInstall();
+      })();
+    `;
+    (document.head || document.documentElement).appendChild(pageScript);
+    pageScript.remove();
+  }
+
+  let timer = null;
+  function update() {
+    timer = null;
+    ensureMapControls();
+  }
+
+  function mutationTouchesTargetUi(records) {
+    return records.some(record => {
+      const target = record.target.nodeType === 1 ? record.target : record.target.parentElement;
+      if (target?.closest('#screen-systems, #panel-notifications')) return true;
+      if (record.type !== 'childList') return false;
+      return Array.from(record.addedNodes).some(node =>
+        node.nodeType === 1 && (
+          node.matches('#screen-systems, #panel-notifications') ||
+          node.querySelector('#screen-systems, #panel-notifications')
+        )
+      );
+    });
+  }
+
+  function schedule(records) {
+    if (!mutationTouchesTargetUi(records)) return;
+    if (timer) clearTimeout(timer);
+    timer = setTimeout(update, 150);
+  }
+
+  document.addEventListener('click', event => {
+    document.querySelectorAll('.fa-target-filter[open]').forEach(filter => {
+      if (!filter.contains(event.target)) filter.removeAttribute('open');
+    });
+  });
+
+  function startDomFeatures() {
+    const observer = new MutationObserver(schedule);
+    observer.observe(document.body, {
+      childList: true,
+      subtree: true,
+      attributes: true,
+      attributeFilter: ['class'],
+    });
+    injectMapHook();
+    update();
+  }
+
+  if (document.body) startDomFeatures();
+  else document.addEventListener('DOMContentLoaded', startDomFeatures, { once: true });
+  })();
+
 })();
