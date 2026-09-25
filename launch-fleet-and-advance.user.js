@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Fonte Antiga - Launch Fleet and Advance
 // @namespace    fa.fleet-launch-next
-// @version      1.4.29
+// @version      1.4.33
 // @description  Add a range launch button to send the selected fleet to multiple destinations
 // @match        *://fonteantiga.com/*
 // @grant        none
@@ -179,9 +179,13 @@
         height: 100% !important;
       }
       .fa-launch-actions > .fa-launch-primary {
-        width: 2.5rem;
-        min-width: 2.5rem;
-        padding: .3rem .9rem !important;
+        width: fit-content !important;
+        min-width: 5rem !important;
+        box-sizing: border-box !important;
+        padding-top: .3rem !important;
+        padding-bottom: .3rem !important;
+        padding-left: 16px !important;
+        padding-right: 16px !important;
       }
       .fa-launch-actions > .fa-launch-primary > span {
         display: none !important;
@@ -190,10 +194,14 @@
         display: inline-flex;
         align-items: center;
         justify-content: center;
-        width: auto;
-        min-width: 3.8rem;
+        width: fit-content !important;
+        min-width: 5rem !important;
+        box-sizing: border-box !important;
         height: 100%;
-        padding: .3rem .9rem !important;
+        padding-top: .3rem !important;
+        padding-bottom: .3rem !important;
+        padding-left: 16px !important;
+        padding-right: 16px !important;
         text-align: center;
       }
       .fa-launch-max-label-prefix {
