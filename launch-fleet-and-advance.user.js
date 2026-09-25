@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Fonte Antiga - Launch Fleet and Advance
 // @namespace    fa.fleet-launch-next
-// @version      1.4.4
+// @version      1.4.27
 // @description  Add a range launch button to send the selected fleet to multiple destinations
 // @match        *://fonteantiga.com/*
 // @grant        none
@@ -86,6 +86,13 @@
       height: 100%;
       min-height: 0;
     }
+    .fa-launch-actions .fa-launch-max-wrap {
+      align-self: stretch;
+      height: auto !important;
+    }
+    .fa-launch-actions .fa-launch-max-btn {
+      height: 100% !important;
+    }
     .fa-launch-max-wrap .fa-launch-max-btn {
       padding-right: 2.1em;
     }
@@ -131,6 +138,70 @@
       color: var(--accent);
       background: var(--panel);
       border-color: var(--accent);
+    }
+    .fa-launch-max-icon {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      flex: 0 0 auto;
+    }
+    .fa-launch-max-icon svg {
+      width: 1em;
+      height: 1em;
+    }
+    @media (max-width: 1280px) {
+      #fleet-launch-line {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: stretch;
+      }
+      #fleet-launch-line > .launch-cell {
+        flex: 0 0 auto;
+        width: max-content;
+        min-width: max-content;
+        box-sizing: border-box;
+        gap: 5px;
+      }
+      #fleet-launch-line .launch-cell-label {
+        font-size: calc(var(--fs-xs) * .7);
+      }
+      #fleet-launch-line .launch-cell-value {
+        font-size: calc(var(--fs-base) * .7);
+      }
+      .fa-launch-actions {
+        gap: .35rem;
+      }
+      .fa-launch-actions .fa-launch-max-wrap {
+        align-self: stretch;
+        height: auto !important;
+      }
+      .fa-launch-actions .fa-launch-max-btn {
+        height: 100% !important;
+      }
+      .fa-launch-actions > .fa-launch-primary {
+        width: 2.5rem;
+        min-width: 2.5rem;
+        padding: .3rem;
+      }
+      .fa-launch-actions > .fa-launch-primary > span {
+        display: none !important;
+      }
+      .fa-launch-actions .fa-launch-max-btn {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: auto;
+        min-width: 3.8rem;
+        height: 100%;
+        padding: .3rem 2.1em;
+        text-align: center;
+      }
+      .fa-launch-max-label-prefix {
+        display: none;
+      }
+      .fa-launch-max-label-range {
+        white-space: nowrap;
+      }
     }
   `;
   document.head.appendChild(style);
@@ -322,7 +393,7 @@
 
     const requestId = (parseInt(button.dataset.requestId, 10) || 0) + 1;
     button.dataset.requestId = requestId;
-    const label = button.querySelector('.fa-launch-max-label');
+    const label = button.querySelector('.fa-launch-max-label-range');
     if (!label || button.dataset.launching === 'true') return;
     // Keep the current visual state while the debounced check is in flight.
     // Toggling disabled/label here made overlapping refreshes appear as
@@ -347,8 +418,8 @@
     const canLaunch = count > 0;
     const reason = launchBlockReason(remaining, ships);
     label.textContent = canLaunch
-      ? `Launch to ${currentPosition}-${remaining[count - 1]}`
-      : 'Launch to —';
+      ? (count === 1 ? String(currentPosition) : `${currentPosition}-${remaining[count - 1]}`)
+      : '—';
     button.disabled = !canLaunch;
     button.title = canLaunch
       ? 'Launch the selected fleet to every available planet in this displayed range.'
@@ -380,6 +451,7 @@
       actions.className = 'fa-launch-actions';
       launchButton.insertAdjacentElement('beforebegin', actions);
     }
+    launchButton.classList.add('fa-launch-primary');
     if (!actions.contains(launchButton)) actions.appendChild(launchButton);
     if (!actions.contains(maxWrap)) actions.appendChild(maxWrap);
 
@@ -409,7 +481,21 @@
     const maxButton = document.createElement('button');
     maxButton.type = 'button';
     maxButton.className = 'deploy-launch-btn fa-launch-max-btn';
-    maxButton.innerHTML = '<span class="fa-launch-max-label">Launch to …</span><span class="inline-progress fa-launch-progress hidden" aria-hidden="true"><span class="ip-track"><span class="ip-fill"></span></span></span>';
+    const maxIcon = document.createElement('span');
+    maxIcon.className = 'fa-launch-max-icon';
+    maxIcon.setAttribute('aria-hidden', 'true');
+    const launchIcon = launchButton.querySelector('svg');
+    if (launchIcon) maxIcon.appendChild(launchIcon.cloneNode(true));
+    maxButton.appendChild(maxIcon);
+    const maxLabel = document.createElement('span');
+    maxLabel.className = 'fa-launch-max-label';
+    maxLabel.innerHTML = '<span class="fa-launch-max-label-prefix">Launch to </span><span class="fa-launch-max-label-range">…</span>';
+    maxButton.appendChild(maxLabel);
+    const progress = document.createElement('span');
+    progress.className = 'inline-progress fa-launch-progress hidden';
+    progress.setAttribute('aria-hidden', 'true');
+    progress.innerHTML = '<span class="ip-track"><span class="ip-fill"></span></span>';
+    maxButton.appendChild(progress);
     maxButton.title = 'Cannot launch until the target range and available fleet resources are checked.';
     maxButton.disabled = true;
     maxButton.addEventListener('click', () => launchMaximum(maxButton));
