@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Fonte Antiga - Universe Overview
 // @namespace    fa.universe-overview
-// @version      2.54.51
+// @version      2.54.52
 // @description  Universe overview, notification intelligence, and Galaxy map markers
 // @match        *://fonteantiga.com/*
 // @grant        none
@@ -3062,11 +3062,16 @@
     return selected;
   }
 
+  // Persist the initial/default selection as well as later checkbox changes.
+  // This makes the filter state explicit in localStorage on first use and
+  // restores the same selection after a full page reload.
   let selectedTypes = loadSelectedTypes();
 
   function saveSelectedTypes() {
     saveStorage(TYPES_STORAGE_KEY, Array.from(selectedTypes));
   }
+
+  saveSelectedTypes();
 
   function setSelectedTypes(types) {
     selectedTypes = new Set(types.filter(type => TYPE_KEYS.has(type)));
