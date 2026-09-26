@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Fonte Antiga - Universe Overview
 // @namespace    fa.universe-overview
-// @version      2.54.52
+// @version      2.54.53
 // @description  Universe overview, notification intelligence, and Galaxy map markers
 // @match        *://fonteantiga.com/*
 // @grant        none
@@ -3051,15 +3051,9 @@
   function loadSelectedTypes() {
     const value = readStorage(TYPES_STORAGE_KEY, null);
     if (!Array.isArray(value)) return new Set(ALL_TYPE_KEYS);
-    const selected = new Set(value.filter(type => TYPE_KEYS.has(type)));
-    // Preserve the previous Exploration selection when upgrading to the
-    // split Planet/System exploration filters. Persist the migration so the
-    // page-context map hook does not have to infer user preferences repeatedly.
-    if (selected.has('exploration') && !selected.has('system_exploration')) {
-      selected.add('system_exploration');
-      saveStorage(TYPES_STORAGE_KEY, Array.from(selected));
-    }
-    return selected;
+    // Keep the saved selection exactly as the user chose it. In particular,
+    // do not re-add System exploration when it was deliberately unchecked.
+    return new Set(value.filter(type => TYPE_KEYS.has(type)));
   }
 
   // Persist the initial/default selection as well as later checkbox changes.
