@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Fonte Antiga - Universe Overview
 // @namespace    fa.universe-overview
-// @version      2.54.53
+// @version      2.54.54
 // @description  Universe overview, notification intelligence, and Galaxy map markers
 // @match        *://fonteantiga.com/*
 // @grant        none
@@ -22,6 +22,7 @@
   const REFRESH_ENDPOINTS = [
     id => `/planets/${id}`,
     id => `/planets/${id}/resources`,
+    id => `/planets/${id}/construction`,
     id => `/planets/${id}/buildings`,
     id => `/planets/${id}/build-queue`,
     id => `/planets/${id}/research-queue`,
@@ -35,6 +36,7 @@
   const CATEGORY_BY_SUFFIX = {
     '': 'base',
     '/resources': 'resources',
+    '/construction': 'buildings',
     '/buildings': 'buildings',
     '/build-queue': 'buildQueue',
     '/research-queue': 'researchQueue',
@@ -1233,7 +1235,12 @@
   async function applyApiResponse(url, status, body, observedAt = new Date().toISOString()) {
     const info = apiInfo(url);
     if (!info || status < 200 || status >= 300 || body == null) return;
-    const bodyObject = Array.isArray(body) ? body[0] : body;
+    // `/construction` returns an envelope (`{ buildings: [...] }`), while
+    // older `/buildings` responses may be the array itself. Keep one stable
+    // stored shape so the inventory renderer can consume both contracts.
+    const normalizedBody = info.category === 'buildings' && body && !Array.isArray(body)
+      && Array.isArray(body.buildings) ? body.buildings : body;
+    const bodyObject = Array.isArray(normalizedBody) ? normalizedBody[0] : normalizedBody;
     const record = getOrCreateRecord({
       planetId: info.id,
       galaxy: bodyObject && bodyObject.galaxy,
@@ -1242,7 +1249,7 @@
       name: bodyObject && bodyObject.name,
     });
     const originalTime = new Date().toISOString();
-    touchRecord(record, info.category, body, observedAt || originalTime);
+    touchRecord(record, info.category, normalizedBody, observedAt || originalTime);
     await saveRecord(record);
     scheduleRender();
   }
