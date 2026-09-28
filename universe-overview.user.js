@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Fonte Antiga - Universe Overview
 // @namespace    fa.universe-overview
-// @version      2.54.57
+// @version      2.54.58
 // @description  Universe overview, notification intelligence, and Galaxy map markers
 // @match        *://fonteantiga.com/*
 // @grant        none
@@ -22,7 +22,7 @@
   const REFRESH_ENDPOINTS = [
     id => `/planets/${id}`,
     id => `/planets/${id}/resources`,
-    id => `/planets/${id}/construction`,
+    id => `/planets/${id}/views/construction`,
     id => `/planets/${id}/buildings`,
     id => `/planets/${id}/build-queue`,
     id => `/planets/${id}/research-queue`,
