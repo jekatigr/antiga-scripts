@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Fonte Antiga - Universe Overview
 // @namespace    fa.universe-overview
-// @version      2.54.58
+// @version      2.54.59
 // @description  Universe overview, notification intelligence, and Galaxy map markers
 // @match        *://fonteantiga.com/*
 // @grant        none
@@ -970,19 +970,12 @@
           const galaxy = Number(event.data.galaxy), system = Number(event.data.system);
           if (!Number.isInteger(galaxy) || galaxy < 1 || !Number.isInteger(system) || system < 1) return;
           (async () => {
-            // Galaxy Map and System are separate tabs. The old implementation
-            // opened the systems screen, which either showed the wrong screen
-            // or left an empty tab. Keep the current planet screen and activate
-            // the Galaxy Map tab instead.
+            // Open the System tab for the selected coordinates, not the Galaxy Map.
             if (typeof activateTab !== 'function' || typeof refreshHome !== 'function') return;
             if (typeof state === 'undefined') return;
             state.viewedSystem = { galaxy, system };
-            state.galaxyMapSelected = { galaxy, system };
-            activateTab('galaxymap');
+            activateTab('system');
             await refreshHome();
-            if (typeof ensureGalaxyMap === 'function') await ensureGalaxyMap();
-            state.galaxyMapSelected = { galaxy, system };
-            if (typeof redrawGalaxyMapIfVisible === 'function') redrawGalaxyMapIfVisible();
           })().catch(() => {});
         });
       })();
