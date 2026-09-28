@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Fonte Antiga - Universe Overview
 // @namespace    fa.universe-overview
-// @version      2.54.54
+// @version      2.54.57
 // @description  Universe overview, notification intelligence, and Galaxy map markers
 // @match        *://fonteantiga.com/*
 // @grant        none
@@ -38,6 +38,7 @@
     '/resources': 'resources',
     '/construction': 'buildings',
     '/buildings': 'buildings',
+    '/views/construction': 'constructionView',
     '/build-queue': 'buildQueue',
     '/research-queue': 'researchQueue',
     '/ship-queue': 'shipQueue',
@@ -1238,9 +1239,11 @@
     // `/construction` returns an envelope (`{ buildings: [...] }`), while
     // older `/buildings` responses may be the array itself. Keep one stable
     // stored shape so the inventory renderer can consume both contracts.
+    const isConstructionView = info.category === 'constructionView';
     const normalizedBody = info.category === 'buildings' && body && !Array.isArray(body)
       && Array.isArray(body.buildings) ? body.buildings : body;
-    const bodyObject = Array.isArray(normalizedBody) ? normalizedBody[0] : normalizedBody;
+    const buildings = isConstructionView ? body.buildings : normalizedBody;
+    const bodyObject = Array.isArray(buildings) ? buildings[0] : buildings;
     const record = getOrCreateRecord({
       planetId: info.id,
       galaxy: bodyObject && bodyObject.galaxy,
@@ -1249,7 +1252,14 @@
       name: bodyObject && bodyObject.name,
     });
     const originalTime = new Date().toISOString();
-    touchRecord(record, info.category, normalizedBody, observedAt || originalTime);
+    const timestamp = observedAt || originalTime;
+    if (isConstructionView) {
+      if (Array.isArray(body.buildings)) touchRecord(record, 'buildings', body.buildings, info.endpoint, timestamp);
+      if (Array.isArray(body.build_queue)) touchRecord(record, 'buildQueue', body.build_queue, info.endpoint, timestamp);
+      if (Array.isArray(body.defense_queue)) touchRecord(record, 'defenseQueue', body.defense_queue, info.endpoint, timestamp);
+    } else {
+      touchRecord(record, info.category, normalizedBody, timestamp);
+    }
     await saveRecord(record);
     scheduleRender();
   }
@@ -1911,15 +1921,41 @@
     const perItemSeconds = durationSource == null || number(durationSource) <= 0 ? null : number(durationSource);
     return { adjustments, perItemSeconds };
   }
+  function systemUniqueBuildBlocked(record, key) {
+    if (state.ownedSubview !== 'buildings' || !['megastructure_stellar_forge', 'megastructure_wormhole_gate'].includes(key)
+      || record.owned !== true || record.system == null) return false;
+    return [...state.records.values()].some(other => {
+      if (other === record || other.owned !== true || Number(other.system) !== Number(record.system)
+        || (record.galaxy != null && other.galaxy != null && Number(other.galaxy) !== Number(record.galaxy))) return false;
+      const buildings = valueFor(other, 'buildings');
+      const existing = Array.isArray(buildings) && buildings.some(building =>
+        String(building?.type ?? building?.building_key ?? building?.key ?? '') === key && number(building?.amount ?? building?.level) > 0);
+      const queue = valueFor(other, 'buildQueue');
+      const queued = Array.isArray(queue) && queue.some(entry =>
+        String(entry?.building_key ?? entry?.type ?? entry?.key ?? '') === key && entry.is_demolition !== true);
+      return existing || queued;
+    });
+  }
   function inventoryCell(record, spec, catalogItem) {
     const items = valueFor(record, spec.dataKey);
     const known = Array.isArray(items);
     const item = known ? items.find(candidate => inventoryItemKey(spec, candidate) === catalogItem.key) : null;
-    const primary = !known ? '?' : item && inventoryQuantity(spec, item) > 0 ? fmt(inventoryQuantity(spec, item)) : '—';
+    const blocked = systemUniqueBuildBlocked(record, catalogItem.key) && inventoryQuantity(spec, item) <= 0;
+    const primary = blocked ? '' : !known ? '?' : item && inventoryQuantity(spec, item) > 0 ? fmt(inventoryQuantity(spec, item)) : '—';
     const queued = known ? queuedInventory(spec, record, catalogItem.key, item) : null;
     const td = document.createElement('td'); td.className = 'fa-summary-inventory-cell';
     const value = document.createElement('div'); value.className = 'fa-summary-inventory-value'; value.textContent = primary;
     if (primary === '—') value.classList.add('fa-summary-na');
+    if (blocked) {
+      const unavailable = document.createElement('span');
+      unavailable.className = 'fa-summary-stellar-forge-state';
+      unavailable.textContent = '❌';
+      unavailable.style.fontSize = '1.35em';
+      unavailable.style.lineHeight = '1';
+      unavailable.title = `${catalogItem.label} already exists or is queued in this system`;
+      unavailable.setAttribute('aria-label', unavailable.title);
+      value.appendChild(unavailable);
+    }
     const forgeState = stellarForgeState(item, spec);
     if (forgeState) {
       const indicator = document.createElement('span');
