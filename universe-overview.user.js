@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Fonte Antiga - Universe Overview
 // @namespace    fa.universe-overview
-// @version      2.54.59
+// @version      2.54.60
 // @description  Universe overview, notification intelligence, and Galaxy map markers
 // @match        *://fonteantiga.com/*
 // @grant        none
@@ -3411,7 +3411,7 @@
         }
         function drawTargetSystems() {
           let points;
-          try { points = state.galaxyMapPoints; } catch (_) { return; }
+          try { points = gameGalaxyMap.points; } catch (_) { return; }
           const canvas = document.getElementById('galaxy-map-canvas');
           if (!canvas || !Array.isArray(points)) return;
           const overlay = getTargetOverlay(canvas);
