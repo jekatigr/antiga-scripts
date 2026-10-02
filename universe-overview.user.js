@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Fonte Antiga - Universe Overview
 // @namespace    fa.universe-overview
-// @version      2.54.60
+// @version      2.54.71
 // @description  Universe overview, notification intelligence, and Galaxy map markers
 // @match        *://fonteantiga.com/*
 // @grant        none
@@ -20,16 +20,11 @@
   const NOTIFICATION_SYNC_STATE_EVENT = 'fa-notifications-sync-state';
   // req() expects application paths and adds /api itself.
   const REFRESH_ENDPOINTS = [
-    id => `/planets/${id}`,
-    id => `/planets/${id}/resources`,
+    id => `/planets/${id}/views/overview`,
     id => `/planets/${id}/views/construction`,
-    id => `/planets/${id}/buildings`,
-    id => `/planets/${id}/build-queue`,
-    id => `/planets/${id}/research-queue`,
-    id => `/planets/${id}/ship-queue`,
-    id => `/planets/${id}/defense-queue`,
-    id => `/planets/${id}/defenses`,
-    id => `/planets/${id}/ships`,
+    id => `/planets/${id}/views/research`,
+    id => `/planets/${id}/views/shipyard`,
+    id => `/planets/${id}/views/fleet-command`,
   ];
   const REFRESH_ENDPOINT_DELAY = 100;
   const REFRESH_PLANET_DELAY = 500;
@@ -39,6 +34,10 @@
     '/construction': 'buildings',
     '/buildings': 'buildings',
     '/views/construction': 'constructionView',
+    '/views/overview': 'overviewView',
+    '/views/research': 'researchView',
+    '/views/shipyard': 'shipyardView',
+    '/views/fleet-command': 'fleetCommandView',
     '/build-queue': 'buildQueue',
     '/research-queue': 'researchQueue',
     '/ship-queue': 'shipQueue',
@@ -239,7 +238,8 @@
           function relevantPath(url) {
             try {
               const path = new URL(url, location.href).pathname;
-              return path === '/api/poll' || path === '/api/notifications' ? path : null;
+              if (path === '/api/poll' || path === '/api/notifications' || /^\\/api\\/planets\\/\\d+(?:\\/(?:resources|views\\/[a-z-]+|buildings|build-queue|research-queue|ship-queue|defense-queue|defenses|ships))?$/.test(path)) return path;
+              return null;
             } catch (_) { return null; }
           }
           function report(path, status, text) {
@@ -295,6 +295,7 @@
       if (!event.data || event.data.source !== 'fa.notifications.network' || event.data.status < 200 || event.data.status >= 300) return;
       if (event.data.path === '/api/poll') poll(event.data.body).catch(() => {});
       if (event.data.path === '/api/notifications') upsert(items(event.data.body)).catch(() => {});
+      if (event.data.path.startsWith('/api/planets/')) applyApiResponse(event.data.path, event.data.status, event.data.body).catch(() => {});
     }
     window.addEventListener('message', handlePageNetworkMessage);
     installPageNetworkBridge();
@@ -1232,6 +1233,7 @@
     // `/construction` returns an envelope (`{ buildings: [...] }`), while
     // older `/buildings` responses may be the array itself. Keep one stable
     // stored shape so the inventory renderer can consume both contracts.
+    const isView = ['constructionView', 'overviewView', 'researchView', 'shipyardView', 'fleetCommandView'].includes(info.category);
     const isConstructionView = info.category === 'constructionView';
     const normalizedBody = info.category === 'buildings' && body && !Array.isArray(body)
       && Array.isArray(body.buildings) ? body.buildings : body;
@@ -1246,10 +1248,13 @@
     });
     const originalTime = new Date().toISOString();
     const timestamp = observedAt || originalTime;
-    if (isConstructionView) {
-      if (Array.isArray(body.buildings)) touchRecord(record, 'buildings', body.buildings, info.endpoint, timestamp);
-      if (Array.isArray(body.build_queue)) touchRecord(record, 'buildQueue', body.build_queue, info.endpoint, timestamp);
-      if (Array.isArray(body.defense_queue)) touchRecord(record, 'defenseQueue', body.defense_queue, info.endpoint, timestamp);
+    if (isView) {
+      if (info.category === 'overviewView') touchRecord(record, 'overviewView', body, info.endpoint, timestamp);
+      if (info.category === 'fleetCommandView') touchRecord(record, 'fleetCommandView', body, info.endpoint, timestamp);
+      if (body.resources) touchRecord(record, 'resources', body.resources, info.endpoint, timestamp);
+      for (const [field, category] of [['buildings', 'buildings'], ['defenses', 'defenses'], ['ships', 'ships'], ['build_queue', 'buildQueue'], ['research_queue', 'researchQueue'], ['ship_queue', 'shipQueue'], ['defense_queue', 'defenseQueue']]) {
+        if (Array.isArray(body[field])) touchRecord(record, category, body[field], info.endpoint, timestamp);
+      }
     } else {
       touchRecord(record, info.category, normalizedBody, timestamp);
     }
@@ -1557,7 +1562,29 @@
     return timestamps.filter(Boolean).sort((a, b) => new Date(a).getTime() - new Date(b).getTime())[0] || null;
   }
   function economyTimestamp(record) {
-    return oldestTimestamp(latestObservation(record), stampFor(record, 'resources'), stampFor(record, 'base'));
+    // Overview combines planet-level size/capacity data with resources and
+    // production. Its badge represents the oldest of those relevant updates,
+    // not unrelated inventory or queue observations.
+    return oldestTimestamp(stampFor(record, 'base'), stampFor(record, 'resources'));
+  }
+  function planetNameTimestamp(record) {
+    if (state.ownedSubview === 'overview') return stampFor(record, 'overviewView');
+    if (state.ownedSubview === 'ships') {
+      // Ship inventories are observed from both the Shipyard and Fleet Command views.
+      return [stampFor(record, 'ships'), stampFor(record, 'fleetCommandView')]
+        .filter(Boolean).sort((a, b) => new Date(b).getTime() - new Date(a).getTime())[0] || null;
+    }
+    const category = state.ownedSubview === 'buildings' ? 'buildings'
+      : state.ownedSubview === 'defenses' ? 'defenses' : null;
+    return category ? stampFor(record, category) : null;
+  }
+  function planetNameTimestampTitle(record, timestamp) {
+    if (!timestamp) return 'Not observed';
+    if (state.ownedSubview === 'overview') return `Overview fetched ${new Date(timestamp).toLocaleString()}`;
+    const label = state.ownedSubview === 'buildings' ? 'Buildings'
+      : state.ownedSubview === 'ships' ? 'Ships'
+        : state.ownedSubview === 'defenses' ? 'Defences' : 'Planet data';
+    return `${label} observed ${new Date(timestamp).toLocaleString()}`;
   }
   function economyTimestampTitle(record, timestamp) {
     if (!timestamp) return 'No observation available';
@@ -2199,7 +2226,7 @@
     );
     const cells = {
       number: cell(rowNumber, null),
-      name: cell(name, null, 'fa-summary-name', record.owned === true ? economyTimestamp(record) : undefined, record.owned === true ? economyTimestampTitle(record, economyTimestamp(record)) : undefined, record.owned === true),
+      name: cell(name, null, 'fa-summary-name', record.owned === true ? planetNameTimestamp(record) : undefined, record.owned === true ? planetNameTimestampTitle(record, planetNameTimestamp(record)) : undefined, record.owned === true),
       explorationAt: cell(record.owned === true ? '—' : (reportAt ? elapsedDetailed(reportAt) : '?'), null, reportAt ? '' : 'fa-summary-na', undefined, undefined, false),
       coordinates: coordinateCell(location),
       sizeUsed: cell(sizeKnown ? percent(usedSize, totalSize) : '?', null, usedSize == null || totalSize == null ? 'fa-summary-na' : ''),
