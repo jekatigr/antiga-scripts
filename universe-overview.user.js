@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Fonte Antiga - Universe Overview
 // @namespace    fa.universe-overview
-// @version      2.54.71
+// @version      2.54.82
 // @description  Universe overview, notification intelligence, and Galaxy map markers
 // @match        *://fonteantiga.com/*
 // @grant        none
@@ -29,7 +29,6 @@
   const REFRESH_ENDPOINT_DELAY = 100;
   const REFRESH_PLANET_DELAY = 500;
   const CATEGORY_BY_SUFFIX = {
-    '': 'base',
     '/resources': 'resources',
     '/construction': 'buildings',
     '/buildings': 'buildings',
@@ -711,6 +710,7 @@
     .fa-summary-time { position: absolute !important; inset-inline-start: auto; inset-inline-end: .25rem; inset-block-end: .15rem; z-index: 0; display: block; width: max-content; max-width: calc(100% - .5rem); margin: 0; padding: .04rem .2rem; border: 1px solid var(--border-soft); border-radius: .15rem; background: var(--panel-alt) !important; color: var(--fg-dim, #8993a8) !important; font-size: .6rem; line-height: 1; white-space: nowrap; pointer-events: none; opacity: .9; contain: layout paint; }
     .fa-summary-time.fa-summary-time-stale { background: var(--fg) !important; border-color: var(--fg); color: var(--bg, #0a0d13) !important; opacity: 1; }
     .fa-summary-sub { display: block; margin-top: .15rem; color: var(--muted); font-size: .72rem; white-space: nowrap; }
+    .fa-summary-wormhole-pair { display: block; margin-top: .12rem; color: var(--accent); font-size: .67rem; line-height: 1.15; white-space: normal; overflow-wrap: anywhere; }
     .fa-summary-inventory-queue { display: inline-block; max-width: 100%; margin-top: .15rem; padding: .08rem .22rem; box-sizing: border-box; overflow: visible !important; text-overflow: clip !important; border: 1px solid var(--border-soft); border-radius: .2rem; background: var(--panel-alt); color: var(--fg); font-size: .62rem; line-height: 1.1; white-space: normal; overflow-wrap: normal; word-break: normal; }
     .fa-summary-stale { color: var(--muted); }
     .fa-summary-warn { color: #ffcc66; }
@@ -1235,25 +1235,30 @@
     // stored shape so the inventory renderer can consume both contracts.
     const isView = ['constructionView', 'overviewView', 'researchView', 'shipyardView', 'fleetCommandView'].includes(info.category);
     const isConstructionView = info.category === 'constructionView';
+    const overviewPlanet = info.category === 'overviewView' ? body.planet : null;
     const normalizedBody = info.category === 'buildings' && body && !Array.isArray(body)
       && Array.isArray(body.buildings) ? body.buildings : body;
     const buildings = isConstructionView ? body.buildings : normalizedBody;
     const bodyObject = Array.isArray(buildings) ? buildings[0] : buildings;
     const record = getOrCreateRecord({
       planetId: info.id,
-      galaxy: bodyObject && bodyObject.galaxy,
-      system: bodyObject && bodyObject.system,
-      position: bodyObject && bodyObject.position,
-      name: bodyObject && bodyObject.name,
+      galaxy: (overviewPlanet || bodyObject)?.galaxy,
+      system: (overviewPlanet || bodyObject)?.system,
+      position: (overviewPlanet || bodyObject)?.position,
+      name: (overviewPlanet || bodyObject)?.name,
     });
     const originalTime = new Date().toISOString();
     const timestamp = observedAt || originalTime;
     if (isView) {
-      if (info.category === 'overviewView') touchRecord(record, 'overviewView', body, info.endpoint, timestamp);
+      if (info.category === 'overviewView') {
+        touchRecord(record, 'overviewView', body, info.endpoint, timestamp);
+        if (overviewPlanet) touchRecord(record, 'base', overviewPlanet, info.endpoint, timestamp);
+      }
       if (info.category === 'fleetCommandView') touchRecord(record, 'fleetCommandView', body, info.endpoint, timestamp);
       if (body.resources) touchRecord(record, 'resources', body.resources, info.endpoint, timestamp);
       for (const [field, category] of [['buildings', 'buildings'], ['defenses', 'defenses'], ['ships', 'ships'], ['build_queue', 'buildQueue'], ['research_queue', 'researchQueue'], ['ship_queue', 'shipQueue'], ['defense_queue', 'defenseQueue']]) {
-        if (Array.isArray(body[field])) touchRecord(record, category, body[field], info.endpoint, timestamp);
+        const items = Array.isArray(body[field]) ? body[field] : (field === 'buildings' && Array.isArray(body.buildings?.buildings) ? body.buildings.buildings : null);
+        if (items) touchRecord(record, category, items, info.endpoint, timestamp);
       }
     } else {
       touchRecord(record, info.category, normalizedBody, timestamp);
@@ -1712,7 +1717,11 @@
     return `${building.name || building.building_name || building.type || 'building'}${building.amount != null ? `: ${building.amount}` : ''}`;
   }
   function knownBuildings(record, notification) {
-    const observedBuildings = valueFor(record, 'buildings');
+    const construction = valueFor(record, 'constructionView');
+    const constructionBuildings = Array.isArray(construction?.buildings) ? construction.buildings : null;
+    // Prefer the latest construction view because it carries gate pairing
+    // metadata that can be absent from separately cached building data.
+    const observedBuildings = constructionBuildings || valueFor(record, 'buildings');
     if (record.owned === true) {
       if (Array.isArray(observedBuildings)) return { items: observedBuildings.filter(building => building && typeof building === 'object' && number(building.amount ?? building.level) > 0), observedAt: stampFor(record, 'buildings'), known: true };
       return { items: [], observedAt: null, known: false };
@@ -1942,12 +1951,13 @@
     return { adjustments, perItemSeconds };
   }
   function systemUniqueBuildBlocked(record, key) {
-    if (state.ownedSubview !== 'buildings' || !['megastructure_stellar_forge', 'megastructure_wormhole_gate'].includes(key)
+    if (state.ownedSubview !== 'buildings' || !['megastructure_stellar_forge', 'megastructure_wormhole_gate', 'megastructure_dyson_swarm'].includes(key)
       || record.owned !== true || record.system == null) return false;
     return [...state.records.values()].some(other => {
       if (other === record || other.owned !== true || Number(other.system) !== Number(record.system)
         || (record.galaxy != null && other.galaxy != null && Number(other.galaxy) !== Number(record.galaxy))) return false;
-      const buildings = valueFor(other, 'buildings');
+      const construction = valueFor(other, 'constructionView');
+      const buildings = Array.isArray(construction?.buildings) ? construction.buildings : valueFor(other, 'buildings');
       const existing = Array.isArray(buildings) && buildings.some(building =>
         String(building?.type ?? building?.building_key ?? building?.key ?? '') === key && number(building?.amount ?? building?.level) > 0);
       const queue = valueFor(other, 'buildQueue');
@@ -1972,9 +1982,18 @@
       unavailable.textContent = '❌';
       unavailable.style.fontSize = '1.35em';
       unavailable.style.lineHeight = '1';
-      unavailable.title = `${catalogItem.label} already exists or is queued in this system`;
+      unavailable.title = `${catalogItem.label} cannot be built: this system already has one or it is queued`;
       unavailable.setAttribute('aria-label', unavailable.title);
       value.appendChild(unavailable);
+    }
+    td.appendChild(value);
+    if (state.ownedSubview === 'buildings' && catalogItem.key === 'megastructure_wormhole_gate'
+      && item?.wormhole_gate_paired_planet_id && item.wormhole_gate_paired_planet_name) {
+      const pair = document.createElement('div');
+      pair.className = 'fa-summary-wormhole-pair';
+      pair.textContent = `↔ ${item.wormhole_gate_paired_planet_name}`;
+      pair.title = `Paired with ${item.wormhole_gate_paired_planet_name}`;
+      td.appendChild(pair);
     }
     const forgeState = stellarForgeState(item, spec);
     if (forgeState) {
@@ -1985,7 +2004,6 @@
       indicator.setAttribute('aria-label', forgeState.label);
       value.appendChild(indicator);
     }
-    td.appendChild(value);
     if (queued) {
       const queue = document.createElement('div'); queue.className = 'fa-summary-inventory-queue';
       const count = document.createElement('span');
