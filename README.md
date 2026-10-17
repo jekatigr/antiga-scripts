@@ -35,5 +35,8 @@ Adds a range-labelled launch button next to the normal launch button. For exampl
 ### [Resource Summary](https://github.com/jekatigr/antiga-scripts/blob/master/resource-summary.user.js)
 Shows a **Σ total** beside resource amounts in exploration reports, battle results, harvest reports, and active fleet cargo, so you can see the combined haul without adding Metal, Silicon, and Helium yourself.
 
+### [Hide Clear All Notifications](https://github.com/jekatigr/antiga-scripts/blob/master/hide-clear-all-notifications.user.js)
+Hides the **Clear All** button in the notifications panel to help prevent accidentally clearing notifications.
+
 ### [Explore From Nearest Colony](https://github.com/jekatigr/antiga-scripts/blob/master/explore-from-nearest-colony.user.js)
 When you choose **Explore** in the Galaxy tab, opens the closest colony first so the fleet launches from a nearby location and uses less travel time.
